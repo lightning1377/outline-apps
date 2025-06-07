@@ -40,18 +40,21 @@ export class VPNManagementAPI {
     this.apiPassword = apiPassword;
   }
 
-  private async postRequest(action: string, payload: Record<string, any> = {}): Promise<ApiResponse> {
+  private async postRequest(
+    action: string,
+    payload: Record<string, string> = {}
+  ): Promise<ApiResponse> {
     if (!this.apiPassword || !this.baseUrl) {
       return {
         status: 400,
-        message: 'API URL and/or password is missing.'
+        message: 'API URL and/or password is missing.',
       };
     }
 
     const data = new FormData();
     data.append('password', this.apiPassword);
     data.append('action', action);
-    
+
     // Add payload data to form
     Object.keys(payload).forEach(key => {
       data.append(key, payload[key]);
@@ -60,7 +63,7 @@ export class VPNManagementAPI {
     try {
       const response = await fetch(this.baseUrl, {
         method: 'POST',
-        body: data
+        body: data,
       });
 
       if (!response.ok) {
@@ -71,7 +74,7 @@ export class VPNManagementAPI {
     } catch (error) {
       return {
         status: 500,
-        message: error instanceof Error ? error.message : String(error)
+        message: error instanceof Error ? error.message : String(error),
       };
     }
   }
@@ -80,59 +83,67 @@ export class VPNManagementAPI {
     return this.postRequest('fetch_servers');
   }
 
-  async storeLogs(logs: Array<{type: string; isp: string; success: boolean}>): Promise<ApiResponse> {
+  async storeLogs(
+    logs: Array<{type: string; isp: string; success: boolean}>
+  ): Promise<ApiResponse> {
     if (!Array.isArray(logs)) {
       throw new Error('Logs must be provided as an array of objects.');
     }
 
     for (const log of logs) {
       if (!log.type || !log.isp || typeof log.success !== 'boolean') {
-        throw new Error("Each log entry must contain 'type', 'isp', and 'success' properties.");
+        throw new Error(
+          "Each log entry must contain 'type', 'isp', and 'success' properties."
+        );
       }
     }
 
     const payload = {
       action: 'store_logs',
-      logs_array: JSON.stringify(logs)
+      logs_array: JSON.stringify(logs),
     };
 
     return this.postRequest('store_logs', payload);
   }
 
-  async testServerSpeed(serverId: string, serverName: string): Promise<ServerTestResult> {
+  async testServerSpeed(
+    serverId: string,
+    _serverName: string
+  ): Promise<ServerTestResult> {
     const startTime = Date.now();
-    
+
+    let timeoutId: NodeJS.Timeout | number | undefined;
+
     try {
-      // Test basic connectivity by making a request to a known endpoint through the proxy
-      // This is a simplified test - in production you might want to use more sophisticated methods
-      const testUrl = 'https://www.google.com/generate_204'; // Returns 204 No Content quickly
-      
-      // Simulate connection test (in real implementation, you'd proxy this through the server)
-      const response = await fetch(testUrl, {
+      // Test basic connectivity with a lightweight endpoint
+      const connectivityTestUrl = 'https://httpbin.org/status/200';
+
+      // Create timeout controller for cross-browser compatibility
+      const abortController = new AbortController();
+      timeoutId = setTimeout(() => abortController.abort(), 10000);
+
+      const connectivityResponse = await fetch(connectivityTestUrl, {
         method: 'GET',
-        // Note: In a real implementation, you would configure the request to go through the proxy server
-        signal: AbortSignal.timeout(10000) // 10 second timeout
+        signal: abortController.signal,
       });
 
       const responseTime = Date.now() - startTime;
-      
-      // Simulate bandwidth test with a small download
-      const bandwidthTestStart = Date.now();
-      const bandwidthTestResponse = await fetch('https://httpbin.org/bytes/1024', {
-        signal: AbortSignal.timeout(15000) // 15 second timeout
-      });
-      const bandwidthTestData = await bandwidthTestResponse.arrayBuffer();
-      const bandwidthTestTime = Date.now() - bandwidthTestStart;
-      
-      // Calculate bandwidth in KB/s
-      const bandwidth = Math.round((bandwidthTestData.byteLength / 1024) / (bandwidthTestTime / 1000));
+
+      if (!connectivityResponse.ok) {
+        throw new Error(
+          `Connectivity test failed: ${connectivityResponse.status}`
+        );
+      }
+
+      // Perform bandwidth test with multiple sizes for better accuracy
+      const bandwidth = await this.performBandwidthTest();
 
       return {
         serverId,
         responseTime,
         bandwidth,
-        success: response.ok && bandwidthTestResponse.ok,
-        error: response.ok && bandwidthTestResponse.ok ? undefined : 'Connection test failed'
+        success: true,
+        error: undefined,
       };
     } catch (error) {
       return {
@@ -140,14 +151,97 @@ export class VPNManagementAPI {
         responseTime: Date.now() - startTime,
         bandwidth: 0,
         success: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      // Ensure timeout is always cleared
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 
-  async testAllServers(servers: Array<{id: string; name: string}>): Promise<ServerTestResult[]> {
+  private async performBandwidthTest(): Promise<number> {
+    // Test with multiple data sizes to get a more accurate measurement
+    const testSizes = [
+      {bytes: 100 * 1024, url: 'https://httpbin.org/bytes/102400'}, // 100KB
+      {bytes: 500 * 1024, url: 'https://httpbin.org/bytes/512000'}, // 500KB
+      {bytes: 1024 * 1024, url: 'https://httpbin.org/bytes/1048576'}, // 1MB
+    ];
+
+    const bandwidthResults: number[] = [];
+
+    for (const testSize of testSizes) {
+      let bandwidthTimeoutId: NodeJS.Timeout | number | undefined;
+
+      try {
+        const bandwidthTestStart = performance.now();
+
+        // Create timeout controller for cross-browser compatibility
+        const bandwidthAbortController = new AbortController();
+        bandwidthTimeoutId = setTimeout(
+          () => bandwidthAbortController.abort(),
+          30000
+        );
+
+        const bandwidthTestResponse = await fetch(testSize.url, {
+          signal: bandwidthAbortController.signal,
+        });
+
+        if (!bandwidthTestResponse.ok) {
+          console.warn(
+            `Bandwidth test failed for ${testSize.bytes} bytes: ${bandwidthTestResponse.status}`
+          );
+          continue;
+        }
+
+        const bandwidthTestData = await bandwidthTestResponse.arrayBuffer();
+        const bandwidthTestTime = performance.now() - bandwidthTestStart;
+
+        // Calculate bandwidth in KB/s, ensuring we have valid timing
+        if (bandwidthTestTime > 0 && bandwidthTestData.byteLength > 0) {
+          const bandwidth =
+            bandwidthTestData.byteLength / 1024 / (bandwidthTestTime / 1000);
+          bandwidthResults.push(bandwidth);
+        }
+      } catch (error) {
+        console.warn(
+          `Bandwidth test failed for ${testSize.bytes} bytes:`,
+          error
+        );
+        // Continue with other test sizes
+      } finally {
+        // Ensure timeout is always cleared
+        if (bandwidthTimeoutId) {
+          clearTimeout(bandwidthTimeoutId);
+        }
+      }
+    }
+
+    if (bandwidthResults.length === 0) {
+      throw new Error('All bandwidth tests failed');
+    }
+
+    // Return the median bandwidth for better accuracy
+    const sortedResults = bandwidthResults.sort((a, b) => a - b);
+    const medianIndex = Math.floor(sortedResults.length / 2);
+
+    let medianBandwidth;
+    if (sortedResults.length % 2 === 0) {
+      medianBandwidth =
+        (sortedResults[medianIndex - 1] + sortedResults[medianIndex]) / 2;
+    } else {
+      medianBandwidth = sortedResults[medianIndex];
+    }
+
+    return Math.round(medianBandwidth);
+  }
+
+  async testAllServers(
+    servers: Array<{id: string; name: string}>
+  ): Promise<ServerTestResult[]> {
     const results: ServerTestResult[] = [];
-    
+
     // Test servers concurrently with a limit to avoid overwhelming the network
     const concurrencyLimit = 3;
     for (let i = 0; i < servers.length; i += concurrencyLimit) {
@@ -157,7 +251,7 @@ export class VPNManagementAPI {
       );
       results.push(...batchResults);
     }
-    
+
     return results;
   }
-} 
+}

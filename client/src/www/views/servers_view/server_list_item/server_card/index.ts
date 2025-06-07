@@ -147,6 +147,22 @@ const sharedCSS = css`
     text-transform: uppercase;
   }
 
+  .test-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .test-button md-circular-progress {
+    --md-circular-progress-size: 16px;
+    --md-circular-progress-active-indicator-color: var(--outline-primary);
+  }
+
+  .test-button:disabled {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
   .card-metadata-speed-test {
     margin-top: var(--outline-mini-gutter);
   }
@@ -294,7 +310,10 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
           <md-menu-item @click="${dispatchers.beginRename}">
             ${localize('server-rename')}
           </md-menu-item>
-          <md-menu-item @click="${dispatchers.testSpeed}">
+          <md-menu-item
+            @click="${dispatchers.testSpeed}"
+            ?disabled=${server.isTesting}
+          >
             ${localize('server-test-speed')}
           </md-menu-item>
           <md-menu-item @click="${dispatchers.forget}">
@@ -319,8 +338,15 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
               class="card-footer-button test-button"
               @click="${dispatchers.testSpeed}"
               title="${localize('test-server-speed')}"
+              ?disabled=${server.isTesting}
             >
-              <md-icon slot="icon">speed</md-icon>
+              ${server.isTesting
+                ? html`<md-circular-progress
+                    slot="icon"
+                    indeterminate
+                  ></md-circular-progress>`
+                : html`<md-icon slot="icon">speed</md-icon>`}
+              ${localize('server-test-speed')}
             </md-text-button>
             <md-text-button
               class="card-footer-button"

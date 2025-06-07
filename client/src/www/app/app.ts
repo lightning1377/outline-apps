@@ -88,6 +88,7 @@ export class App {
   private serverConnectionChangeTimeouts: {[serverId: string]: boolean} = {};
   private vpnApi: VPNManagementAPI = new VPNManagementAPI();
   private serverTestResults: Map<string, ServerTestResult> = new Map();
+  private serversCurrentlyTesting: Set<string> = new Set();
 
   // Feature flag to control whether dark mode is enabled
   // When set to true, the theme option will appear in the navigation menu
@@ -1000,8 +1001,20 @@ export class App {
 
   private async testServerSpeed(event: CustomEvent) {
     const {serverId} = event.detail;
+
+    // Prevent concurrent testing of the same server
+    if (this.serversCurrentlyTesting.has(serverId)) {
+      return;
+    }
+
     try {
       const server = this.getServerByServerId(serverId);
+
+      // Mark server as testing and update UI
+      this.serversCurrentlyTesting.add(serverId);
+      this.updateServerListItem(serverId, {
+        isTesting: true,
+      });
 
       this.rootEl.showToast(this.localize('testing-server-speed'));
       const result = await this.vpnApi.testServerSpeed(serverId, server.name);
@@ -1014,6 +1027,7 @@ export class App {
         bandwidth: result.bandwidth,
         speedTestSuccess: result.success,
         speedTestError: result.error,
+        isTesting: false,
       });
 
       if (result.success) {
@@ -1036,9 +1050,17 @@ export class App {
         );
       }
     } catch (error) {
+      // Ensure we clear the testing state even on error
+      this.updateServerListItem(serverId, {
+        isTesting: false,
+      });
+
       this.showLocalizedError(
         error instanceof Error ? error : new Error(String(error))
       );
+    } finally {
+      // Always remove from testing set
+      this.serversCurrentlyTesting.delete(serverId);
     }
   }
 
@@ -1049,6 +1071,16 @@ export class App {
         this.rootEl.showToast(this.localize('no-servers-to-test'));
         return;
       }
+
+      // Mark all servers as testing
+      servers.forEach(server => {
+        if (!this.serversCurrentlyTesting.has(server.id)) {
+          this.serversCurrentlyTesting.add(server.id);
+          this.updateServerListItem(server.id, {
+            isTesting: true,
+          });
+        }
+      });
 
       this.rootEl.showToast(this.localize('testing-all-servers'));
 
@@ -1068,7 +1100,9 @@ export class App {
           bandwidth: result.bandwidth,
           speedTestSuccess: result.success,
           speedTestError: result.error,
+          isTesting: false,
         });
+        this.serversCurrentlyTesting.delete(result.serverId);
       }
 
       const successfulTests = results.filter(r => r.success).length;
@@ -1095,6 +1129,14 @@ export class App {
         console.warn('Failed to store test logs:', error);
       }
     } catch (error) {
+      // Clear testing state for all servers on error
+      this.serversCurrentlyTesting.forEach(serverId => {
+        this.updateServerListItem(serverId, {
+          isTesting: false,
+        });
+      });
+      this.serversCurrentlyTesting.clear();
+
       this.showLocalizedError(
         error instanceof Error ? error : new Error(String(error))
       );

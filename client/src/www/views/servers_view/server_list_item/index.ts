@@ -40,6 +40,8 @@ export interface ServerListItem {
   bandwidth?: number;
   speedTestSuccess?: boolean;
   speedTestError?: string;
+  // Speed test state
+  isTesting?: boolean;
 }
 
 /**
