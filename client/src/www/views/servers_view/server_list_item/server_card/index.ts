@@ -125,7 +125,15 @@ const sharedCSS = css`
     box-sizing: border-box;
     grid-area: footer;
     padding: var(--outline-mini-gutter) var(--outline-gutter);
-    text-align: end;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-footer-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: center;
   }
 
   .card-error {
@@ -137,6 +145,28 @@ const sharedCSS = css`
     --md-sys-color-primary: var(--outline-primary);
 
     text-transform: uppercase;
+  }
+
+  .card-metadata-speed-test {
+    margin-top: var(--outline-mini-gutter);
+  }
+
+  .speed-test-result {
+    font-size: 0.75rem;
+    font-family: var(--outline-font-family);
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+
+  .speed-test-result.success {
+    background-color: rgba(76, 175, 80, 0.1);
+    color: #4caf50;
+  }
+
+  .speed-test-result.error {
+    background-color: rgba(244, 67, 54, 0.1);
+    color: #f44336;
   }
 `;
 
@@ -192,6 +222,14 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
           }
         )
       ),
+    testSpeed: () =>
+      element.dispatchEvent(
+        new CustomEvent('TestServerSpeedRequested', {
+          detail: {serverId: server.id},
+          bubbles: true,
+          composed: true,
+        })
+      ),
   };
 
   const handleMenuOpen = () => {
@@ -219,6 +257,31 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
             ${messages.serverName}
           </h2>
           <label class="card-metadata-server-address">${server.address}</label>
+          ${server.responseTime !== undefined
+            ? html`
+                <div class="card-metadata-speed-test">
+                  <span
+                    class="speed-test-result ${server.speedTestSuccess
+                      ? 'success'
+                      : 'error'}"
+                  >
+                    ${server.speedTestSuccess
+                      ? localize(
+                          'speed-test-results',
+                          'responseTime',
+                          String(server.responseTime),
+                          'bandwidth',
+                          String(server.bandwidth || 0)
+                        )
+                      : localize(
+                          'speed-test-failed-short',
+                          'error',
+                          server.speedTestError || 'Unknown error'
+                        )}
+                  </span>
+                </div>
+              `
+            : ''}
         </div>
       `,
       menu: html`
@@ -230,6 +293,9 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
         >
           <md-menu-item @click="${dispatchers.beginRename}">
             ${localize('server-rename')}
+          </md-menu-item>
+          <md-menu-item @click="${dispatchers.testSpeed}">
+            ${localize('server-test-speed')}
           </md-menu-item>
           <md-menu-item @click="${dispatchers.forget}">
             ${localize('server-forget')}
@@ -248,13 +314,22 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
       footer: html`
         <footer class="card-footer">
           <span class="card-error">${messages.error}</span>
-          <md-text-button
-            class="card-footer-button"
-            @click="${dispatchers.connectToggle}"
-            ?disabled=${hasErrorMessage}
-          >
-            ${messages.connectButton}
-          </md-text-button>
+          <div class="card-footer-buttons">
+            <md-text-button
+              class="card-footer-button test-button"
+              @click="${dispatchers.testSpeed}"
+              title="${localize('test-server-speed')}"
+            >
+              <md-icon slot="icon">speed</md-icon>
+            </md-text-button>
+            <md-text-button
+              class="card-footer-button"
+              @click="${dispatchers.connectToggle}"
+              ?disabled=${hasErrorMessage}
+            >
+              ${messages.connectButton}
+            </md-text-button>
+          </div>
         </footer>
       `,
       renameDialog: html`<server-rename-dialog

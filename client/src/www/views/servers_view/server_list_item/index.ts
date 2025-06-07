@@ -35,6 +35,11 @@ export interface ServerListItem {
   id: string;
   name: string;
   connectionState: ServerConnectionState;
+  // Speed test results
+  responseTime?: number;
+  bandwidth?: number;
+  speedTestSuccess?: boolean;
+  speedTestError?: string;
 }
 
 /**

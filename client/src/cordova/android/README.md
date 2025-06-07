@@ -129,6 +129,6 @@ You can debug the Java code using [logcat on Android Studio](https://developer.a
 
 1. Start the app
 1. Select the "Logcat" tab at the bottom
-1. Select `org.outline.android.client` in the middle menu (it should not say "no debuggable processes")
+1. Select `org.cloudtree.outline.android.client` in the middle menu (it should not say "no debuggable processes")
 
 It's also possible to use the [`logcat` command](https://developer.android.com/tools/logcat).

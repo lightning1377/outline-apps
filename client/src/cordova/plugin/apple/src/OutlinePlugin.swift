@@ -50,7 +50,7 @@ class OutlinePlugin: CDVPlugin {
 #else
   private static let kPlatform = "iOS"
 #endif
-  private static let kAppGroup = "group.org.getoutline.client"
+  private static let kAppGroup = "group.org.cloudtree.getoutline.client"
 
   override func pluginInitialize() {
 #if DEBUG

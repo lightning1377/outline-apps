@@ -43,7 +43,7 @@ NSString *const kDefaultPathKey = @"defaultPath";
 
 - (id)init {
   self = [super init];
-  NSString *appGroup = @"group.org.getoutline.client";
+  NSString *appGroup = @"group.org.cloudtree.getoutline.client";
   NSURL *containerUrl = [[NSFileManager defaultManager]
                          containerURLForSecurityApplicationGroupIdentifier:appGroup];
   NSString *logsDirectory = [[containerUrl path] stringByAppendingPathComponent:@"Logs"];
@@ -53,7 +53,7 @@ NSString *const kDefaultPathKey = @"defaultPath";
   [DDLog addLogger:[DDOSLogger sharedInstance]];
   [DDLog addLogger:_fileLogger];
 
-  _packetQueue = dispatch_queue_create("org.getoutline.packetqueue", DISPATCH_QUEUE_SERIAL);
+  _packetQueue = dispatch_queue_create("org.cloudtree.getoutline.packetqueue", DISPATCH_QUEUE_SERIAL);
 
   return self;
 }

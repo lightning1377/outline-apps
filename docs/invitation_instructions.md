@@ -11,7 +11,7 @@ Have an invitation to connect to an Outline server? Follow these instructions to
 
 |Download|  |
 | ------------- | ------------- |
-| [Android ›](https://play.google.com/store/apps/details?id=org.outline.android.client) | If Google Play is not accessible, [get it here](https://s3.amazonaws.com/outline-releases/client/android/stable/Outline-Client.apk). |
+| [Android ›](https://play.google.com/store/apps/details?id=org.cloudtree.outline.android.client) | If Google Play is not accessible, [get it here](https://s3.amazonaws.com/outline-releases/client/android/stable/Outline-Client.apk). |
 | [iOS ›](https://apps.apple.com/app/outline-app/id1356177741) | Get Outline on the App Store |
 | [Windows ›](https://s3.amazonaws.com/outline-releases/client/windows/stable/Outline-Client.exe) | Download Outline.exe and double click to launch. |
 | [macOS ›](https://apps.apple.com/app/outline-app/id1356178125) | Get Outline on the Mac App Store |

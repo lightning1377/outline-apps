@@ -15,6 +15,7 @@
 import {Localizer} from '@outline/infrastructure/i18n';
 import {OperationTimedOut} from '@outline/infrastructure/timeout_promise';
 
+import {VPNManagementAPI, ServerTestResult} from './api_server_repository';
 import {Clipboard} from './clipboard';
 import {EnvironmentVariables} from './environment';
 import * as config from './outline_server_repository/config';
@@ -85,6 +86,8 @@ export class App {
   private localize: Localizer;
   private ignoredAccessKeys: {[accessKey: string]: boolean} = {};
   private serverConnectionChangeTimeouts: {[serverId: string]: boolean} = {};
+  private vpnApi: VPNManagementAPI = new VPNManagementAPI();
+  private serverTestResults: Map<string, ServerTestResult> = new Map();
 
   // Feature flag to control whether dark mode is enabled
   // When set to true, the theme option will appear in the navigation menu
@@ -189,6 +192,22 @@ export class App {
       'SetLanguageRequested',
       this.setAppLanguage.bind(this)
     );
+    this.rootEl.addEventListener(
+      'ConfigureApiRequested',
+      this.configureApi.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'FetchApiServersRequested',
+      this.fetchApiServers.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'TestServerSpeedRequested',
+      this.testServerSpeed.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'TestAllServersRequested',
+      this.testAllServers.bind(this)
+    );
 
     if (this.appearanceFeatureEnabled) {
       this.rootEl.showAppearanceView = true;
@@ -252,9 +271,18 @@ export class App {
     };
     if (!this.arePrivacyTermsAcked()) {
       this.displayPrivacyView();
-    } else if (this.rootEl.$.serversView.shouldShowZeroState) {
-      this.rootEl.$.addServerView.open = true;
     }
+
+    // Initialize API configuration from stored settings
+    const storedApiUrl = this.settings.get(SettingsKey.API_URL);
+    const storedApiPassword = this.settings.get(SettingsKey.API_PASSWORD);
+    if (storedApiUrl && storedApiPassword) {
+      this.vpnApi.setApiConfig(storedApiUrl, storedApiPassword);
+    }
+
+    // Pass stored API credentials to the UI
+    this.rootEl.storedApiUrl = storedApiUrl || '';
+    this.rootEl.storedApiPassword = storedApiPassword || '';
   }
 
   showLocalizedError(error?: Error, toastDuration = 10000) {
@@ -399,7 +427,7 @@ export class App {
   private ackPrivacyTerms() {
     this.rootEl.$.serversView.hidden = false;
     this.rootEl.$.privacyView.open = false;
-    this.rootEl.$.addServerView.open = true;
+    this.rootEl.showApiConfigDialog = true;
     this.settings.set(SettingsKey.PRIVACY_ACK, 'true');
   }
 
@@ -905,4 +933,173 @@ export class App {
 
     this.rootEl.selectedAppearance = appearance;
   }
+
+  //#region API Management methods
+
+  private configureApi(event: CustomEvent) {
+    const {apiUrl, apiPassword} = event.detail;
+    this.vpnApi.setApiConfig(apiUrl, apiPassword);
+    this.rootEl.showToast(this.localize('api-configured'));
+    // Store API configuration in settings for persistence
+    this.settings.set(SettingsKey.API_URL, apiUrl);
+    this.settings.set(SettingsKey.API_PASSWORD, apiPassword);
+    // Update stored values in the UI
+    this.rootEl.storedApiUrl = apiUrl;
+    this.rootEl.storedApiPassword = apiPassword;
+  }
+
+  private async fetchApiServers(_event: CustomEvent) {
+    try {
+      this.rootEl.showToast(this.localize('fetching-servers'));
+      const response = await this.vpnApi.fetchServers();
+
+      if (response.status !== 200) {
+        throw new Error(response.message || 'Failed to fetch servers');
+      }
+
+      if (response.data && response.data.length > 0) {
+        let successfulAdds = 0;
+
+        // Add each server from the API response
+        for (const serverData of response.data) {
+          try {
+            const accessKey = serverData.server_link;
+            // Validate that it's a proper Outline access key before adding
+            if (isOutlineAccessKey(accessKey)) {
+              await this.serverRepo.add(accessKey);
+              successfulAdds++;
+            } else {
+              console.warn(
+                `Invalid access key format for server ${serverData.row_id}: ${accessKey}`
+              );
+            }
+          } catch (error) {
+            console.warn(
+              `Failed to add server ${serverData.row_id} with access key ${serverData.server_link}:`,
+              error
+            );
+          }
+        }
+
+        if (successfulAdds > 0) {
+          this.rootEl.showToast(
+            this.localize('servers-fetched', 'count', String(successfulAdds))
+          );
+        } else {
+          this.rootEl.showToast(this.localize('no-valid-servers-added'));
+        }
+      } else {
+        this.rootEl.showToast(this.localize('no-servers-available'));
+      }
+    } catch (error) {
+      this.showLocalizedError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private async testServerSpeed(event: CustomEvent) {
+    const {serverId} = event.detail;
+    try {
+      const server = this.getServerByServerId(serverId);
+
+      this.rootEl.showToast(this.localize('testing-server-speed'));
+      const result = await this.vpnApi.testServerSpeed(serverId, server.name);
+
+      this.serverTestResults.set(serverId, result);
+
+      // Update the server list item with test results
+      this.updateServerListItem(serverId, {
+        responseTime: result.responseTime,
+        bandwidth: result.bandwidth,
+        speedTestSuccess: result.success,
+        speedTestError: result.error,
+      });
+
+      if (result.success) {
+        this.rootEl.showToast(
+          this.localize(
+            'speed-test-complete',
+            'responseTime',
+            String(result.responseTime),
+            'bandwidth',
+            String(result.bandwidth)
+          )
+        );
+      } else {
+        this.rootEl.showToast(
+          this.localize(
+            'speed-test-failed',
+            'error',
+            result.error || 'Unknown error'
+          )
+        );
+      }
+    } catch (error) {
+      this.showLocalizedError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private async testAllServers(_event: CustomEvent) {
+    try {
+      const servers = this.serverRepo.getAll();
+      if (servers.length === 0) {
+        this.rootEl.showToast(this.localize('no-servers-to-test'));
+        return;
+      }
+
+      this.rootEl.showToast(this.localize('testing-all-servers'));
+
+      // Convert servers to simple format for testing
+      const serverList = servers.map(server => ({
+        id: server.id,
+        name: server.name,
+      }));
+
+      const results = await this.vpnApi.testAllServers(serverList);
+
+      // Update UI with all results
+      for (const result of results) {
+        this.serverTestResults.set(result.serverId, result);
+        this.updateServerListItem(result.serverId, {
+          responseTime: result.responseTime,
+          bandwidth: result.bandwidth,
+          speedTestSuccess: result.success,
+          speedTestError: result.error,
+        });
+      }
+
+      const successfulTests = results.filter(r => r.success).length;
+      this.rootEl.showToast(
+        this.localize(
+          'all-speed-tests-complete',
+          'successful',
+          String(successfulTests),
+          'total',
+          String(results.length)
+        )
+      );
+
+      // Log the results for potential API submission
+      const logs = results.map(result => ({
+        type: 'speed_test',
+        isp: 'unknown', // Could be enhanced to detect ISP
+        success: result.success,
+      }));
+
+      try {
+        await this.vpnApi.storeLogs(logs);
+      } catch (error) {
+        console.warn('Failed to store test logs:', error);
+      }
+    } catch (error) {
+      this.showLocalizedError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  //#endregion API Management methods
 }
