@@ -1016,7 +1016,6 @@ export class App {
         isTesting: true,
       });
 
-      this.rootEl.showToast(this.localize('testing-server-speed'));
       const result = await this.vpnApi.testServerSpeed(serverId, server.name);
 
       this.serverTestResults.set(serverId, result);
@@ -1029,26 +1028,6 @@ export class App {
         speedTestError: result.error,
         isTesting: false,
       });
-
-      if (result.success) {
-        this.rootEl.showToast(
-          this.localize(
-            'speed-test-complete',
-            'responseTime',
-            String(result.responseTime),
-            'bandwidth',
-            String(result.bandwidth)
-          )
-        );
-      } else {
-        this.rootEl.showToast(
-          this.localize(
-            'speed-test-failed',
-            'error',
-            result.error || 'Unknown error'
-          )
-        );
-      }
     } catch (error) {
       // Ensure we clear the testing state even on error
       this.updateServerListItem(serverId, {

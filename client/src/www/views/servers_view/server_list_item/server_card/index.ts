@@ -130,12 +130,6 @@ const sharedCSS = css`
     justify-content: space-between;
   }
 
-  .card-footer-buttons {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
   .card-error {
     color: var(--outline-error);
     margin: 0 var(--outline-slim-gutter);
@@ -310,12 +304,6 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
           <md-menu-item @click="${dispatchers.beginRename}">
             ${localize('server-rename')}
           </md-menu-item>
-          <md-menu-item
-            @click="${dispatchers.testSpeed}"
-            ?disabled=${server.isTesting}
-          >
-            ${localize('server-test-speed')}
-          </md-menu-item>
           <md-menu-item @click="${dispatchers.forget}">
             ${localize('server-forget')}
           </md-menu-item>
@@ -332,30 +320,28 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
       `,
       footer: html`
         <footer class="card-footer">
+          <md-text-button
+            class="card-footer-button test-button"
+            @click="${dispatchers.testSpeed}"
+            title="${localize('test-server-speed')}"
+            ?disabled=${server.isTesting}
+          >
+            ${server.isTesting
+              ? html`<md-circular-progress
+                  slot="icon"
+                  indeterminate
+                ></md-circular-progress>`
+              : html`<md-icon slot="icon">speed</md-icon>`}
+            ${localize('server-test-speed')}
+          </md-text-button>
           <span class="card-error">${messages.error}</span>
-          <div class="card-footer-buttons">
-            <md-text-button
-              class="card-footer-button test-button"
-              @click="${dispatchers.testSpeed}"
-              title="${localize('test-server-speed')}"
-              ?disabled=${server.isTesting}
-            >
-              ${server.isTesting
-                ? html`<md-circular-progress
-                    slot="icon"
-                    indeterminate
-                  ></md-circular-progress>`
-                : html`<md-icon slot="icon">speed</md-icon>`}
-              ${localize('server-test-speed')}
-            </md-text-button>
-            <md-text-button
-              class="card-footer-button"
-              @click="${dispatchers.connectToggle}"
-              ?disabled=${hasErrorMessage}
-            >
-              ${messages.connectButton}
-            </md-text-button>
-          </div>
+          <md-text-button
+            class="card-footer-button"
+            @click="${dispatchers.connectToggle}"
+            ?disabled=${hasErrorMessage}
+          >
+            ${messages.connectButton}
+          </md-text-button>
         </footer>
       `,
       renameDialog: html`<server-rename-dialog
