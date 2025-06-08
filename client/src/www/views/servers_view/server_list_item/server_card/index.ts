@@ -276,13 +276,7 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
                       : 'error'}"
                   >
                     ${server.speedTestSuccess
-                      ? localize(
-                          'speed-test-results',
-                          'responseTime',
-                          String(server.responseTime),
-                          'bandwidth',
-                          String(server.bandwidth || 0)
-                        )
+                      ? `${server.responseTime}ms • ${server.bandwidth} KB/s`
                       : localize(
                           'speed-test-failed-short',
                           'error',

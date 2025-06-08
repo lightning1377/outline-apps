@@ -1016,18 +1016,50 @@ export class App {
         isTesting: true,
       });
 
-      const result = await this.vpnApi.testServerSpeed(serverId, server.name);
+      // Check if server is already connected
+      const wasConnected = await server.checkRunning();
+      let shouldDisconnect = false;
 
-      this.serverTestResults.set(serverId, result);
+      try {
+        // If server is not connected, connect it first
+        if (!wasConnected) {
+          console.debug(`Connecting to server ${serverId} for speed test`);
+          await server.connect();
+          shouldDisconnect = true;
 
-      // Update the server list item with test results
-      this.updateServerListItem(serverId, {
-        responseTime: result.responseTime,
-        bandwidth: result.bandwidth,
-        speedTestSuccess: result.success,
-        speedTestError: result.error,
-        isTesting: false,
-      });
+          // Wait a moment for connection to stabilize
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Now test connectivity through the connected server
+        const result = await this.vpnApi.testConnectivity();
+        result.serverId = serverId;
+
+        this.serverTestResults.set(serverId, result);
+
+        // Update the server list item with test results
+        this.updateServerListItem(serverId, {
+          responseTime: result.responseTime,
+          bandwidth: result.bandwidth,
+          speedTestSuccess: result.success,
+          speedTestError: result.error,
+          isTesting: false,
+        });
+      } finally {
+        // Disconnect if we connected the server ourselves
+        if (shouldDisconnect) {
+          try {
+            console.debug(
+              `Disconnecting from server ${serverId} after speed test`
+            );
+            await server.disconnect();
+          } catch (disconnectError) {
+            console.warn(
+              `Failed to disconnect after speed test: ${disconnectError}`
+            );
+          }
+        }
+      }
     } catch (error) {
       // Ensure we clear the testing state even on error
       this.updateServerListItem(serverId, {
@@ -1063,28 +1095,83 @@ export class App {
 
       this.rootEl.showToast(this.localize('testing-all-servers'));
 
-      // Convert servers to simple format for testing
-      const serverList = servers.map(server => ({
-        id: server.id,
-        name: server.name,
-      }));
+      const results: ServerTestResult[] = [];
 
-      const results = await this.vpnApi.testAllServers(serverList);
+      // Test servers sequentially to avoid overwhelming the network
+      // and to ensure proper connect/disconnect cycles
+      for (const server of servers) {
+        try {
+          // Check if server is already connected
+          const wasConnected = await server.checkRunning();
+          let shouldDisconnect = false;
 
-      // Update UI with all results
-      for (const result of results) {
-        this.serverTestResults.set(result.serverId, result);
-        this.updateServerListItem(result.serverId, {
-          responseTime: result.responseTime,
-          bandwidth: result.bandwidth,
-          speedTestSuccess: result.success,
-          speedTestError: result.error,
-          isTesting: false,
-        });
-        this.serversCurrentlyTesting.delete(result.serverId);
+          try {
+            // If server is not connected, connect it first
+            if (!wasConnected) {
+              console.debug(`Connecting to server ${server.id} for speed test`);
+              await server.connect();
+              shouldDisconnect = true;
+
+              // Wait a moment for connection to stabilize
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            // Now test connectivity through the connected server
+            const result = await this.vpnApi.testConnectivity();
+            result.serverId = server.id;
+            results.push(result);
+
+            this.serverTestResults.set(server.id, result);
+
+            // Update UI with result
+            this.updateServerListItem(result.serverId, {
+              responseTime: result.responseTime,
+              bandwidth: result.bandwidth,
+              speedTestSuccess: result.success,
+              speedTestError: result.error,
+              isTesting: false,
+            });
+          } finally {
+            // Disconnect if we connected the server ourselves
+            if (shouldDisconnect) {
+              try {
+                console.debug(
+                  `Disconnecting from server ${server.id} after speed test`
+                );
+                await server.disconnect();
+              } catch (disconnectError) {
+                console.warn(
+                  `Failed to disconnect after speed test: ${disconnectError}`
+                );
+              }
+            }
+          }
+        } catch (error) {
+          // Create failed result for this server
+          const failedResult: ServerTestResult = {
+            serverId: server.id,
+            responseTime: 0,
+            bandwidth: 0,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+          results.push(failedResult);
+
+          this.updateServerListItem(server.id, {
+            responseTime: 0,
+            bandwidth: 0,
+            speedTestSuccess: false,
+            speedTestError: failedResult.error,
+            isTesting: false,
+          });
+        }
+
+        this.serversCurrentlyTesting.delete(server.id);
       }
 
-      const successfulTests = results.filter(r => r.success).length;
+      const successfulTests = results.filter(
+        (r: ServerTestResult) => r.success
+      ).length;
       this.rootEl.showToast(
         this.localize(
           'all-speed-tests-complete',
@@ -1096,7 +1183,7 @@ export class App {
       );
 
       // Log the results for potential API submission
-      const logs = results.map(result => ({
+      const logs = results.map((result: ServerTestResult) => ({
         type: 'speed_test',
         isp: 'unknown', // Could be enhanced to detect ISP
         success: result.success,

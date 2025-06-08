@@ -106,58 +106,53 @@ export class VPNManagementAPI {
     return this.postRequest('store_logs', payload);
   }
 
-  async testServerSpeed(
-    serverId: string,
-    _serverName: string
-  ): Promise<ServerTestResult> {
-    const startTime = Date.now();
-
-    let timeoutId: NodeJS.Timeout | number | undefined;
+  async testConnectivity(): Promise<ServerTestResult> {
+    const startTime = performance.now();
 
     try {
-      // Test basic connectivity with a lightweight endpoint
+      // Test basic connectivity through the current proxy/connection
       const connectivityTestUrl = 'https://httpbin.org/status/200';
 
-      // Create timeout controller for cross-browser compatibility
       const abortController = new AbortController();
-      timeoutId = setTimeout(() => abortController.abort(), 10000);
+      const timeoutId = setTimeout(() => abortController.abort(), 15000);
 
-      const connectivityResponse = await fetch(connectivityTestUrl, {
-        method: 'GET',
-        signal: abortController.signal,
-      });
+      try {
+        const connectivityResponse = await fetch(connectivityTestUrl, {
+          method: 'GET',
+          signal: abortController.signal,
+        });
 
-      const responseTime = Date.now() - startTime;
+        clearTimeout(timeoutId);
 
-      if (!connectivityResponse.ok) {
-        throw new Error(
-          `Connectivity test failed: ${connectivityResponse.status}`
-        );
+        if (!connectivityResponse.ok) {
+          throw new Error(
+            `Connectivity test failed: ${connectivityResponse.status}`
+          );
+        }
+
+        const responseTime = Math.round(performance.now() - startTime);
+
+        // Perform bandwidth test while connected
+        const bandwidth = await this.performBandwidthTest();
+
+        return {
+          serverId: '',
+          responseTime,
+          bandwidth,
+          success: true,
+          error: undefined,
+        };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      // Perform bandwidth test with multiple sizes for better accuracy
-      const bandwidth = await this.performBandwidthTest();
-
-      return {
-        serverId,
-        responseTime,
-        bandwidth,
-        success: true,
-        error: undefined,
-      };
     } catch (error) {
       return {
-        serverId,
-        responseTime: Date.now() - startTime,
+        serverId: '',
+        responseTime: Math.round(performance.now() - startTime),
         bandwidth: 0,
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
-    } finally {
-      // Ensure timeout is always cleared
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
     }
   }
 
@@ -237,19 +232,19 @@ export class VPNManagementAPI {
     return Math.round(medianBandwidth);
   }
 
-  async testAllServers(
-    servers: Array<{id: string; name: string}>
+  // Note: This method is now just for API compatibility
+  // The actual server testing logic should be handled by the App class
+  // which can manage server connections properly
+  async testConnectivityBatch(
+    serverCount: number
   ): Promise<ServerTestResult[]> {
     const results: ServerTestResult[] = [];
 
-    // Test servers concurrently with a limit to avoid overwhelming the network
-    const concurrencyLimit = 3;
-    for (let i = 0; i < servers.length; i += concurrencyLimit) {
-      const batch = servers.slice(i, i + concurrencyLimit);
-      const batchResults = await Promise.all(
-        batch.map(server => this.testServerSpeed(server.id, server.name))
-      );
-      results.push(...batchResults);
+    // Test connectivity multiple times for statistical purposes
+    for (let i = 0; i < serverCount; i++) {
+      const result = await this.testConnectivity();
+      result.serverId = `test-${i}`;
+      results.push(result);
     }
 
     return results;
