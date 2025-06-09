@@ -101,7 +101,7 @@ export class NetworkChangeDetector {
       },
       {
         name: 'ipgeolocation.io',
-        url: 'https://api.ipgeolocation.io/ipgeo?apiKey=dbbbabe0779748be9fd2a77207dc578d',
+        url: `https://api.ipgeolocation.io/ipgeo?apiKey=${process.env.IPGEOLOCATION_API_KEY}`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         mapResponse: (data: any) => ({
           isp: data.isp || data.organization || 'Unknown ISP',
