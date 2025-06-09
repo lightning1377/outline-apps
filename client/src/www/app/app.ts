@@ -18,7 +18,9 @@ import {OperationTimedOut} from '@outline/infrastructure/timeout_promise';
 import {VPNManagementAPI, ServerTestResult} from './api_server_repository';
 import {Clipboard} from './clipboard';
 import {EnvironmentVariables} from './environment';
+import {NetworkChangeDetector} from './network_change_detector';
 import * as config from './outline_server_repository/config';
+import {ServerLogsHandler, LogType} from './server_logs_handler';
 import {Settings, SettingsKey, Appearance} from './settings';
 import {Updater} from './updater';
 import {UrlInterceptor} from './url_interceptor';
@@ -89,6 +91,8 @@ export class App {
   private vpnApi: VPNManagementAPI = new VPNManagementAPI();
   private serverTestResults: Map<string, ServerTestResult> = new Map();
   private serversCurrentlyTesting: Set<string> = new Set();
+  private serverLogsHandler: ServerLogsHandler;
+  private networkChangeDetector: NetworkChangeDetector;
 
   // Feature flag to control whether dark mode is enabled
   // When set to true, the theme option will appear in the navigation menu
@@ -284,6 +288,23 @@ export class App {
     // Pass stored API credentials to the UI
     this.rootEl.storedApiUrl = storedApiUrl || '';
     this.rootEl.storedApiPassword = storedApiPassword || '';
+
+    // Initialize logging system
+    this.serverLogsHandler = ServerLogsHandler.getInstance(this.vpnApi);
+    this.networkChangeDetector = new NetworkChangeDetector(
+      this.serverRepo,
+      30000,
+      ispInfo => {
+        this.serverLogsHandler.setISPInfo(ispInfo);
+      }
+    );
+
+    // Ensure cleanup on window close
+    window.addEventListener('beforeunload', () => {
+      this.cleanup().catch(error => {
+        console.error('Error during cleanup:', error);
+      });
+    });
   }
 
   showLocalizedError(error?: Error, toastDuration = 10000) {
@@ -586,6 +607,12 @@ export class App {
         address: server.address,
       });
       console.log(`connected to server ${serverId}`);
+
+      if (server.rowId) {
+        // Log successful connection
+        this.serverLogsHandler.addLog(server.rowId, LogType.CONNECTED, true);
+      }
+
       this.rootEl.showToast(
         this.localize('server-connected', 'serverName', server.name)
       );
@@ -595,6 +622,12 @@ export class App {
         connectionState: ServerConnectionState.DISCONNECTED,
       });
       console.error(`could not connect to server ${serverId}: ${e}`);
+
+      if (server.rowId) {
+        // Log failed connection
+        this.serverLogsHandler.addLog(server.rowId, LogType.CONNECTED, false);
+      }
+
       if (
         e instanceof errors.ProxyConnectionFailure &&
         e.cause instanceof errors.SystemConfigurationException
@@ -695,6 +728,12 @@ export class App {
       );
 
       console.log(`disconnected from server ${serverId}`);
+
+      // Log successful disconnection
+      if (server.rowId) {
+        this.serverLogsHandler.addLog(server.rowId, LogType.DISCONNECTED, true);
+      }
+
       this.rootEl.showToast(
         this.localize('server-disconnected', 'serverName', server.name)
       );
@@ -702,6 +741,16 @@ export class App {
       this.updateServerListItem(serverId, {
         connectionState: ServerConnectionState.CONNECTED,
       });
+
+      // Log failed disconnection
+      if (server.rowId) {
+        this.serverLogsHandler.addLog(
+          server.rowId,
+          LogType.DISCONNECTED,
+          false
+        );
+      }
+
       this.showLocalizedError(e);
       console.warn(`could not disconnect from server ${serverId}: ${e.name}`);
     }
@@ -967,7 +1016,7 @@ export class App {
             const accessKey = serverData.server_link;
             // Validate that it's a proper Outline access key before adding
             if (isOutlineAccessKey(accessKey)) {
-              await this.serverRepo.add(accessKey);
+              await this.serverRepo.add(accessKey, serverData.row_id);
               successfulAdds++;
             } else {
               console.warn(
@@ -1037,6 +1086,24 @@ export class App {
 
         this.serverTestResults.set(serverId, result);
 
+        // Only log if server has a rowId (meaning it came from API)
+        if (server.rowId) {
+          if (result.pingSuccess !== undefined) {
+            this.serverLogsHandler.addLog(
+              server.rowId,
+              LogType.PING_TEST,
+              result.pingSuccess
+            );
+          }
+          if (result.bandwidthSuccess !== undefined) {
+            this.serverLogsHandler.addLog(
+              server.rowId,
+              LogType.BANDWIDTH_TEST,
+              result.bandwidthSuccess
+            );
+          }
+        }
+
         // Update the server list item with test results
         this.updateServerListItem(serverId, {
           responseTime: result.responseTime,
@@ -1053,6 +1120,10 @@ export class App {
               `Disconnecting from server ${serverId} after speed test`
             );
             await server.disconnect();
+            // Update UI to reflect disconnected state
+            this.updateServerListItem(serverId, {
+              connectionState: ServerConnectionState.DISCONNECTED,
+            });
           } catch (disconnectError) {
             console.warn(
               `Failed to disconnect after speed test: ${disconnectError}`
@@ -1065,6 +1136,23 @@ export class App {
       this.updateServerListItem(serverId, {
         isTesting: false,
       });
+
+      // Ensure server is properly disconnected if we connected it for testing
+      // This handles cases where the error occurred after connection but before the finally block
+      try {
+        const server = this.getServerByServerId(serverId);
+        const isRunning = await server.checkRunning();
+        if (isRunning) {
+          await server.disconnect();
+          this.updateServerListItem(serverId, {
+            connectionState: ServerConnectionState.DISCONNECTED,
+          });
+        }
+      } catch (disconnectError) {
+        console.warn(
+          `Failed to cleanup server connection after test error: ${disconnectError}`
+        );
+      }
 
       this.showLocalizedError(
         error instanceof Error ? error : new Error(String(error))
@@ -1123,6 +1211,24 @@ export class App {
 
             this.serverTestResults.set(server.id, result);
 
+            // Only log if server has a rowId (meaning it came from API)
+            if (server.rowId) {
+              if (result.pingSuccess !== undefined) {
+                this.serverLogsHandler.addLog(
+                  server.rowId,
+                  LogType.PING_TEST,
+                  result.pingSuccess
+                );
+              }
+              if (result.bandwidthSuccess !== undefined) {
+                this.serverLogsHandler.addLog(
+                  server.rowId,
+                  LogType.BANDWIDTH_TEST,
+                  result.bandwidthSuccess
+                );
+              }
+            }
+
             // Update UI with result
             this.updateServerListItem(result.serverId, {
               responseTime: result.responseTime,
@@ -1139,6 +1245,10 @@ export class App {
                   `Disconnecting from server ${server.id} after speed test`
                 );
                 await server.disconnect();
+                // Update UI to reflect disconnected state
+                this.updateServerListItem(server.id, {
+                  connectionState: ServerConnectionState.DISCONNECTED,
+                });
               } catch (disconnectError) {
                 console.warn(
                   `Failed to disconnect after speed test: ${disconnectError}`
@@ -1157,6 +1267,20 @@ export class App {
           };
           results.push(failedResult);
 
+          // Only log if server has a rowId (meaning it came from API)
+          if (server.rowId) {
+            this.serverLogsHandler.addLog(
+              server.rowId,
+              LogType.PING_TEST,
+              false
+            );
+            this.serverLogsHandler.addLog(
+              server.rowId,
+              LogType.BANDWIDTH_TEST,
+              false
+            );
+          }
+
           this.updateServerListItem(server.id, {
             responseTime: 0,
             bandwidth: 0,
@@ -1164,6 +1288,22 @@ export class App {
             speedTestError: failedResult.error,
             isTesting: false,
           });
+
+          // Ensure server is properly disconnected if we connected it for testing
+          // This handles cases where the error occurred after connection but before the finally block
+          try {
+            const isRunning = await server.checkRunning();
+            if (isRunning) {
+              await server.disconnect();
+              this.updateServerListItem(server.id, {
+                connectionState: ServerConnectionState.DISCONNECTED,
+              });
+            }
+          } catch (disconnectError) {
+            console.warn(
+              `Failed to cleanup server connection after test error: ${disconnectError}`
+            );
+          }
         }
 
         this.serversCurrentlyTesting.delete(server.id);
@@ -1182,18 +1322,7 @@ export class App {
         )
       );
 
-      // Log the results for potential API submission
-      const logs = results.map((result: ServerTestResult) => ({
-        type: 'speed_test',
-        isp: 'unknown', // Could be enhanced to detect ISP
-        success: result.success,
-      }));
-
-      try {
-        await this.vpnApi.storeLogs(logs);
-      } catch (error) {
-        console.warn('Failed to store test logs:', error);
-      }
+      // Note: Individual speed test results are already logged above
     } catch (error) {
       // Clear testing state for all servers on error
       this.serversCurrentlyTesting.forEach(serverId => {
@@ -1210,4 +1339,18 @@ export class App {
   }
 
   //#endregion API Management methods
+
+  public async cleanup(): Promise<void> {
+    // Stop logging components
+    if (this.networkChangeDetector) {
+      this.networkChangeDetector.stop();
+    }
+
+    if (this.serverLogsHandler) {
+      await this.serverLogsHandler.stop();
+    }
+
+    // Cleanup singleton
+    await ServerLogsHandler.cleanup();
+  }
 }

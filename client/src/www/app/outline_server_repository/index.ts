@@ -61,13 +61,14 @@ export function serversStorageV0ConfigToAccessKey(
 }
 
 // V1 server persistence format.
-export type ServersStorageV1 = OutlineServerJson[];
-
-interface OutlineServerJson {
-  readonly id: string;
-  readonly accessKey: string;
-  readonly name: string;
+export interface OutlineServerJson {
+  id: string;
+  accessKey: string;
+  name: string;
+  rowId?: string;
 }
+
+export type ServersStorageV1 = OutlineServerJson[];
 
 type ServerEntry = {accessKey: string; server: Server};
 
@@ -138,7 +139,7 @@ class OutlineServerRepository implements ServerRepository {
     return this.serverById.get(serverId)?.server;
   }
 
-  async add(accessKey: string): Promise<void> {
+  async add(accessKey: string, rowId?: string): Promise<void> {
     const alreadyAddedServer = this.serverFromAccessKey(accessKey);
     if (alreadyAddedServer) {
       throw new errors.ServerAlreadyAdded(alreadyAddedServer);
@@ -146,7 +147,8 @@ class OutlineServerRepository implements ServerRepository {
     const server = await this.internalCreateServer(
       uuidv4(),
       accessKey,
-      undefined
+      undefined,
+      rowId
     );
 
     this.storeServers();
@@ -217,6 +219,7 @@ class OutlineServerRepository implements ServerRepository {
         id: server.id,
         accessKey,
         name: server.name,
+        rowId: server.rowId,
       });
     }
     const json = JSON.stringify(servers);
@@ -226,14 +229,16 @@ class OutlineServerRepository implements ServerRepository {
   async internalCreateServer(
     id: string,
     accessKey: string,
-    name?: string
+    name?: string,
+    rowId?: string
   ): Promise<Server> {
     const server = await newOutlineServer(
       this.vpnApi,
       id,
       name,
       accessKey,
-      this.localize
+      this.localize,
+      rowId
     );
     this.serverById.set(id, {accessKey, server});
     return server;
@@ -295,7 +300,8 @@ async function loadServersV1(storage: Storage, repo: OutlineServerRepository) {
       await repo.internalCreateServer(
         serverJson.id,
         serverJson.accessKey,
-        serverJson.name
+        serverJson.name,
+        serverJson.rowId
       );
     } catch (e) {
       // Don't propagate so other stored servers can be created.

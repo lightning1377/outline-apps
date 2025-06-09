@@ -17,7 +17,7 @@ interface ApiServerData {
   server_link: string;
 }
 
-export interface ApiResponse {
+interface ApiResponse {
   status: number; // HTTP status code (200, 400, etc.)
   message: string;
   data?: ApiServerData[]; // Array of server objects with row_id and server_link
@@ -29,6 +29,8 @@ export interface ServerTestResult {
   bandwidth: number;
   success: boolean;
   error?: string;
+  pingSuccess?: boolean;
+  bandwidthSuccess?: boolean;
 }
 
 export class VPNManagementAPI {
@@ -108,9 +110,14 @@ export class VPNManagementAPI {
 
   async testConnectivity(): Promise<ServerTestResult> {
     const startTime = performance.now();
+    let pingSuccess = false;
+    let bandwidthSuccess = false;
+    let responseTime = 0;
+    let bandwidth = 0;
+    let error: string | undefined;
 
+    // Test basic connectivity (ping test)
     try {
-      // Test basic connectivity through the current proxy/connection
       const connectivityTestUrl = 'https://httpbin.org/status/200';
 
       const abortController = new AbortController();
@@ -130,30 +137,45 @@ export class VPNManagementAPI {
           );
         }
 
-        const responseTime = Math.round(performance.now() - startTime);
-
-        // Perform bandwidth test while connected
-        const bandwidth = await this.performBandwidthTest();
-
-        return {
-          serverId: '',
-          responseTime,
-          bandwidth,
-          success: true,
-          error: undefined,
-        };
+        responseTime = Math.round(performance.now() - startTime);
+        pingSuccess = true;
       } finally {
         clearTimeout(timeoutId);
       }
-    } catch (error) {
-      return {
-        serverId: '',
-        responseTime: Math.round(performance.now() - startTime),
-        bandwidth: 0,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
+    } catch (pingError) {
+      pingSuccess = false;
+      responseTime = Math.round(performance.now() - startTime);
+      error =
+        pingError instanceof Error ? pingError.message : String(pingError);
     }
+
+    // Perform bandwidth test if ping was successful
+    if (pingSuccess) {
+      try {
+        bandwidth = await this.performBandwidthTest();
+        bandwidthSuccess = true;
+      } catch (bandwidthError) {
+        bandwidthSuccess = false;
+        bandwidth = 0;
+        // Only update error if we don't already have a ping error
+        if (!error) {
+          error =
+            bandwidthError instanceof Error
+              ? bandwidthError.message
+              : String(bandwidthError);
+        }
+      }
+    }
+
+    return {
+      serverId: '',
+      responseTime,
+      bandwidth,
+      success: pingSuccess && bandwidthSuccess,
+      pingSuccess,
+      bandwidthSuccess,
+      error,
+    };
   }
 
   private async performBandwidthTest(): Promise<number> {
