@@ -46,8 +46,8 @@ Apple is quite particular when it comes to making sure your app is properly sign
 ### External Contributors
 
 1. Select the "Team" for your own account.
-1. Change the bundle identifier (e.g. `org.outline.ios.client`) to something unique.
-1. Remove the app group `group.org.getoutline.client`.
+1. Change the bundle identifier (e.g. `org.cloudtree.outline.ios.client`) to something unique.
+1. Remove the app group `group.org.cloudtree.getoutline.client`.
 1. Do the same for the "VPN Extension" target.
 
 ## Running the App
@@ -166,7 +166,7 @@ pluginkit -mvA | grep outline
 
 You should see an for the VpnExtension in your Xcode project, where the version and binary location match.  This should output something similar to:
 
-`org.outline.macos.client.VpnExtension(0.0.0-dev)   508D6616-9FCB-4302-B00F-22121C236AAC    2023-07-14 00:05:34 +0000       /Users/$USER/Library/Developer/Xcode/DerivedData/macos-bnidlwvulcdazjfxleynwzkychqi/Build/Products/Debug/Outline.app/Contents/PlugIns/VpnExtension.appex`
+`org.cloudtree.outline.macos.client.VpnExtension(0.0.0-dev)   508D6616-9FCB-4302-B00F-22121C236AAC    2023-07-14 00:05:34 +0000       /Users/$USER/Library/Developer/Xcode/DerivedData/macos-bnidlwvulcdazjfxleynwzkychqi/Build/Products/Debug/Outline.app/Contents/PlugIns/VpnExtension.appex`
 
 Note how `VpnExtension.appex` is inside `Outline.app/`.
 

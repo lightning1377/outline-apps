@@ -18,10 +18,13 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.Manifest;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -49,6 +52,7 @@ import org.outline.IVpnTunnelService;
 import org.outline.TunnelConfig;
 import org.outline.DetailedJsonError;
 import org.outline.log.SentryErrorReporter;
+import outline.ComprehensiveTestResult;
 import outline.NewClientResult;
 import outline.Outline;
 import outline.TCPAndUDPConnectivityResult;
@@ -67,6 +71,8 @@ public class VpnTunnelService extends VpnService {
   private static final int NOTIFICATION_SERVICE_ID = 1;
   private static final int NOTIFICATION_COLOR = 0x00BFA5;
   private static final String NOTIFICATION_CHANNEL_ID = "outline-vpn";
+  private static final String DISCONNECT_ACTION = "org.outline.vpn.DISCONNECT";
+  private static final int DISCONNECT_REQUEST_CODE = 100;
   private static final String TUNNEL_ID_KEY = "id";
   private static final String TUNNEL_CONFIG_KEY = "config";
   private static final String TUNNEL_SERVER_NAME = "serverName";
@@ -114,6 +120,7 @@ public class VpnTunnelService extends VpnService {
   private NetworkConnectivityMonitor networkConnectivityMonitor;
   private VpnTunnelStore tunnelStore;
   private Notification.Builder notificationBuilder;
+  private DisconnectBroadcastReceiver disconnectReceiver;
 
   private final IVpnTunnelService.Stub binder = new IVpnTunnelService.Stub() {
     @Override
@@ -135,6 +142,11 @@ public class VpnTunnelService extends VpnService {
     public void initErrorReporting(String apiKey) {
       VpnTunnelService.this.initErrorReporting(apiKey);
     }
+
+    @Override
+    public String testServerConnectivity(String transportConfig) {
+      return VpnTunnelService.this.testServerConnectivity(transportConfig);
+    }
   };
 
   @Override
@@ -142,6 +154,11 @@ public class VpnTunnelService extends VpnService {
     LOG.info("Creating VPN service.");
     networkConnectivityMonitor = new NetworkConnectivityMonitor();
     tunnelStore = new VpnTunnelStore(VpnTunnelService.this);
+    
+    // Register disconnect broadcast receiver
+    disconnectReceiver = new DisconnectBroadcastReceiver();
+    IntentFilter filter = new IntentFilter(DISCONNECT_ACTION);
+    registerReceiver(disconnectReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
   }
 
   @Override
@@ -190,6 +207,16 @@ public class VpnTunnelService extends VpnService {
   public void onDestroy() {
     LOG.info("Destroying VPN service.");
     tearDownActiveTunnel();
+    
+    // Unregister disconnect broadcast receiver
+    if (disconnectReceiver != null) {
+      try {
+        unregisterReceiver(disconnectReceiver);
+        disconnectReceiver = null;
+      } catch (Exception e) {
+        LOG.warning("Failed to unregister disconnect receiver: " + e.getMessage());
+      }
+    }
   }
 
   // Tunnel API
@@ -379,6 +406,78 @@ public class VpnTunnelService extends VpnService {
     this.remoteDevice = null;
   }
 
+  /** Test server connectivity and bandwidth without establishing VPN routing. */
+  @Nullable
+  private synchronized String testServerConnectivity(@NonNull final String transportConfig) {
+    LOG.info("Testing server connectivity and bandwidth without VPN routing");
+    
+    try {
+      // Create Outline client (same as in startTunnel)
+      final NewClientResult clientResult = Outline.newClient(transportConfig);
+      if (clientResult.getError() != null) {
+        LOG.log(Level.WARNING, "Failed to create Outline Client for testing", clientResult.getError());
+        return null; // Return null on error
+      }
+      final outline.Client client = clientResult.getClient();
+
+      // Perform comprehensive test including connectivity and bandwidth
+      final ComprehensiveTestResult testResult = Outline.performComprehensiveTest(client);
+      
+      // Prepare test results JSON
+      JSONObject testResults = new JSONObject();
+      
+      // TCP connectivity test
+      boolean tcpSuccess = testResult.getTCPError() == null;
+      testResults.put("tcpSuccess", tcpSuccess);
+      if (!tcpSuccess && testResult.getTCPError() != null) {
+        testResults.put("tcpError", testResult.getTCPError().getMessage());
+      }
+      
+      // UDP connectivity test  
+      boolean udpSuccess = testResult.getUDPError() == null;
+      testResults.put("udpSuccess", udpSuccess);
+      if (!udpSuccess && testResult.getUDPError() != null) {
+        testResults.put("udpError", testResult.getUDPError().getMessage());
+      }
+      
+      // Overall connectivity success
+      testResults.put("connectivitySuccess", tcpSuccess);
+      
+      // Bandwidth and latency results
+      boolean bandwidthSuccess = testResult.getBandwidthError() == null && tcpSuccess;
+      testResults.put("bandwidthSuccess", bandwidthSuccess);
+      
+      if (bandwidthSuccess) {
+        testResults.put("downloadSpeedKBps", testResult.getDownloadSpeedKBps());
+        testResults.put("uploadSpeedKBps", testResult.getUploadSpeedKBps());
+        testResults.put("latencyMs", testResult.getLatencyMs());
+      } else {
+        testResults.put("downloadSpeedKBps", -1);
+        testResults.put("uploadSpeedKBps", -1);
+        testResults.put("bandwidth", -1);
+        testResults.put("latencyMs", -1);
+        
+        if (testResult.getBandwidthError() != null) {
+          testResults.put("bandwidthError", testResult.getBandwidthError().getMessage());
+        }
+      }
+      
+      LOG.info(String.format(Locale.ROOT, 
+        "Server test completed: TCP=%s, UDP=%s, Download=%d KB/s, Upload=%d KB/s, Latency=%d ms", 
+        tcpSuccess, udpSuccess, testResult.getDownloadSpeedKBps(), 
+        testResult.getUploadSpeedKBps(), testResult.getLatencyMs()));
+      
+      // Return test results directly as JSON string
+      return testResults.toString();
+      
+    } catch (Exception e) {
+      LOG.log(Level.SEVERE, "Server connectivity test failed", e);
+      return null; // Return null on error
+    }
+  }
+
+
+
   // Connectivity
 
   private class NetworkConnectivityMonitor extends ConnectivityManager.NetworkCallback {
@@ -436,6 +535,30 @@ public class VpnTunnelService extends VpnService {
       connectivityManager.registerNetworkCallback(request, networkConnectivityMonitor);
     } else {
       connectivityManager.requestNetwork(request, networkConnectivityMonitor);
+    }
+  }
+
+  // Disconnect broadcast receiver for notification action
+
+  private class DisconnectBroadcastReceiver extends BroadcastReceiver {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+      if (DISCONNECT_ACTION.equals(intent.getAction())) {
+        LOG.info("Disconnect action received from notification - handling directly");
+        
+        // Handle disconnect directly without opening the app
+        if (tunnelConfig != null) {
+          LOG.info("Disconnecting tunnel: " + tunnelConfig.id);
+          
+          // Broadcast the disconnect event to notify the Cordova plugin if it's running
+          broadcastVpnConnectivityChange(TunnelStatus.DISCONNECTED);
+
+          // Stop the tunnel
+          stopTunnel(tunnelConfig.id);
+        } else {
+          LOG.info("No active tunnel to disconnect");
+        }
+      }
     }
   }
 
@@ -514,19 +637,38 @@ public class VpnTunnelService extends VpnService {
   /** Starts the service in the foreground and displays a persistent notification. */
   private void startForegroundWithNotification(final String serverName) {
     try {
+      LOG.info("Starting foreground notification for server: " + serverName);
+      
+      // Check notification permission for Android 13+ (API level 33+)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) 
+            != PackageManager.PERMISSION_GRANTED) {
+          LOG.warning("POST_NOTIFICATIONS permission not granted. Notifications may not be displayed.");
+          // We can still try to start the foreground service, but notifications may not appear
+        } else {
+          LOG.info("POST_NOTIFICATIONS permission granted.");
+        }
+      }
+      
       if (notificationBuilder == null) {
         // Cache the notification builder so we can update the existing notification - creating a
         // new notification has the side effect of resetting the tunnel timer.
+        LOG.info("Creating new notification builder");
         notificationBuilder = getNotificationBuilder(serverName);
       }
       notificationBuilder.setContentText(getStringResource("connected_server_state"));
 
+      LOG.info("Starting foreground service with notification");
       // We must specify the service type for security reasons: https://developer.android.com/about/versions/14/changes/fgs-types-required
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         startForeground(NOTIFICATION_SERVICE_ID, notificationBuilder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+      } else {
+        // For older Android versions, start foreground service without specifying service type
+        startForeground(NOTIFICATION_SERVICE_ID, notificationBuilder.build());
       }
+      LOG.info("Foreground service started successfully");
     } catch (Exception e) {
-      LOG.warning("Unable to display persistent notification");
+      LOG.log(Level.SEVERE, "Unable to display persistent notification", e);
     }
   }
 
@@ -553,12 +695,25 @@ public class VpnTunnelService extends VpnService {
   private Notification.Builder getNotificationBuilder(final String serverName) throws Exception {
     Intent launchIntent = new Intent(this, getPackageMainActivityClass());
     PendingIntent mainActivityIntent =
-        PendingIntent.getActivity(this, 0, launchIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent.getActivity(this, 0, launchIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+    // Create disconnect action intent that sends a broadcast
+    Intent disconnectIntent = new Intent(DISCONNECT_ACTION);
+    disconnectIntent.setPackage(getPackageName());
+    PendingIntent disconnectPendingIntent = PendingIntent.getBroadcast(
+        this, 
+        DISCONNECT_REQUEST_CODE, 
+        disconnectIntent, 
+        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+    );
 
     Notification.Builder builder;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       NotificationChannel channel = new NotificationChannel(
-          NOTIFICATION_CHANNEL_ID, "Outline", NotificationManager.IMPORTANCE_LOW);
+          NOTIFICATION_CHANNEL_ID, "Outline VPN", NotificationManager.IMPORTANCE_DEFAULT);
+      channel.setDescription("Notifications for Outline VPN connection status");
+      channel.setShowBadge(false);
+      channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
       NotificationManager notificationManager = getSystemService(NotificationManager.class);
       notificationManager.createNotificationChannel(channel);
       builder = new Notification.Builder(this, NOTIFICATION_CHANNEL_ID);
@@ -571,6 +726,14 @@ public class VpnTunnelService extends VpnService {
     } catch (Exception e) {
       LOG.warning("Failed to retrieve the resource ID for the notification icon.");
     }
+    
+    // Add disconnect action to notification
+    builder.addAction(new Notification.Action.Builder(
+        0, // No icon for text action
+        "Disconnect", // Action button text
+        disconnectPendingIntent
+    ).build());
+
     return builder.setContentTitle(serverName)
         .setColor(NOTIFICATION_COLOR)
         .setVisibility(Notification.VISIBILITY_SECRET) // Don't display in lock screen

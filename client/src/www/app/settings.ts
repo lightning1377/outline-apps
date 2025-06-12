@@ -22,6 +22,8 @@ export enum SettingsKey {
   AUTO_CONNECT_DIALOG_DISMISSED = 'auto-connect-dialog-dismissed',
   PRIVACY_ACK = 'privacy-ack',
   APPEARANCE = 'appearance',
+  API_URL = 'api-url',
+  API_PASSWORD = 'api-password',
 }
 
 // Theme options

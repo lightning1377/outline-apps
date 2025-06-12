@@ -64,6 +64,7 @@ import '../views/root_view/root_header';
 import '../views/root_view/root_navigation';
 // eslint-disable-next-line n/no-missing-import
 import '../views/appearance_view';
+
 // eslint-disable-next-line n/no-missing-import
 import * as i18n from '@outline/infrastructure/i18n';
 import {AppLocalizeBehavior} from '@polymer/app-localize-behavior/app-localize-behavior.js';
@@ -314,6 +315,10 @@ export class AppRoot extends mixinBehaviors(
           title$="[[localize(pageTitleKey)]]"
           show-back-button="[[shouldShowBackButton]]"
           show-add-button="[[shouldShowAddButton]]"
+          should-show-zero-state="[[shouldShowZeroState]]"
+          stored-api-url="[[storedApiUrl]]"
+          stored-api-password="[[storedApiPassword]]"
+          show-api-config-dialog="[[showApiConfigDialog]]"
         ></root-header>
 
         <iron-pages id="pages" selected="[[page]]" attr-for-selected="name">
@@ -562,6 +567,22 @@ export class AppRoot extends mixinBehaviors(
       },
       servers: {
         type: Array,
+      },
+      shouldShowZeroState: {
+        type: Boolean,
+        computed: '_computeShouldShowZeroState(servers)',
+      },
+      storedApiUrl: {
+        type: String,
+        value: '',
+      },
+      storedApiPassword: {
+        type: String,
+        value: '',
+      },
+      showApiConfigDialog: {
+        type: Boolean,
+        value: false,
       },
       // Tells AppLocalizeBehavior to bubble its
       // app-localize-resources-loaded event, allowing us listen for it on
@@ -879,6 +900,10 @@ export class AppRoot extends mixinBehaviors(
     return (
       language === 'fa' && this.platform !== 'ios' && this.platform !== 'osx'
     );
+  }
+
+  _computeShouldShowZeroState(servers) {
+    return servers ? servers.length === 0 : false;
   }
 }
 globalThis.customElements.define(AppRoot.is, AppRoot);

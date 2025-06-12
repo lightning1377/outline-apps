@@ -50,4 +50,8 @@ export class CordovaVpnApi implements VpnApi {
     console.debug('CordovaVpnApi: registering onStatusChange callback');
     cordova.exec(callback, onError, OUTLINE_PLUGIN_NAME, 'onStatusChange', []);
   }
+
+  requestNotificationPermission(): Promise<string> {
+    return pluginExec<string>('requestNotificationPermission');
+  }
 }

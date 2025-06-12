@@ -16,8 +16,13 @@ package outline
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/Jigsaw-Code/outline-apps/client/go/outline/config"
 	"github.com/Jigsaw-Code/outline-apps/client/go/outline/platerrors"
@@ -40,6 +45,155 @@ func (c *Client) DialStream(ctx context.Context, address string) (transport.Stre
 
 func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	return c.pl.ListenPacket(ctx)
+}
+
+// BandwidthTestResult represents the results of bandwidth and latency testing
+type BandwidthTestResult struct {
+	DownloadSpeedKBps int64 // Download speed in KB/s
+	UploadSpeedKBps   int64 // Upload speed in KB/s
+	LatencyMs         int64 // Round-trip latency in milliseconds
+	Error             *platerrors.PlatformError
+}
+
+// TestLatency measures the round-trip time to a test server through the proxy
+func (c *Client) TestLatency(ctx context.Context, testURL string) int64 {
+	start := time.Now()
+
+	// Create HTTP client that uses our proxy transport
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return c.sd.Dial(ctx, addr)
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := httpClient.Head(testURL)
+	if err != nil {
+		return -1 // Error occurred
+	}
+	defer resp.Body.Close()
+
+	return time.Since(start).Milliseconds()
+}
+
+// TestDownloadSpeed measures download speed by downloading data through the proxy
+func (c *Client) TestDownloadSpeed(ctx context.Context, testURL string, durationSeconds int) int64 {
+	// Create HTTP client that uses our proxy transport
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return c.sd.Dial(ctx, addr)
+			},
+		},
+		Timeout: time.Duration(durationSeconds+5) * time.Second,
+	}
+
+	start := time.Now()
+	resp, err := httpClient.Get(testURL)
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+
+	var totalBytes int64
+	buffer := make([]byte, 128*1024) // Increased to 128KB buffer for better throughput
+	testDuration := time.Duration(durationSeconds) * time.Second
+
+	for time.Since(start) < testDuration {
+		n, err := resp.Body.Read(buffer)
+		if err != nil && err != io.EOF {
+			break
+		}
+		totalBytes += int64(n)
+		if err == io.EOF {
+			break
+		}
+	}
+
+	actualDuration := time.Since(start)
+	if actualDuration.Milliseconds() == 0 {
+		return -1
+	}
+
+	// Return speed in KB/s
+	return totalBytes / int64(actualDuration.Milliseconds()) * 1000 / 1024
+}
+
+// TestUploadSpeed measures upload speed by uploading data through the proxy
+func (c *Client) TestUploadSpeed(ctx context.Context, testURL string, durationSeconds int) int64 {
+	// Create HTTP client that uses our proxy transport
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return c.sd.Dial(ctx, addr)
+			},
+		},
+		Timeout: time.Duration(durationSeconds+5) * time.Second,
+	}
+
+	// Create test data
+	chunkSize := 256 * 1024 // Increased to 256KB chunks
+	data := make([]byte, chunkSize)
+	rand.Read(data)
+
+	start := time.Now()
+	var totalBytes int64
+	testDuration := time.Duration(durationSeconds) * time.Second
+
+	for time.Since(start) < testDuration {
+		// Create a new request for each chunk using strings.Reader
+		resp, err := httpClient.Post(testURL, "application/octet-stream",
+			strings.NewReader(string(data)))
+
+		if err != nil {
+			break
+		}
+		resp.Body.Close()
+
+		totalBytes += int64(chunkSize)
+
+		// Reduced delay to 5ms to allow for higher throughput
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	actualDuration := time.Since(start)
+	if actualDuration.Milliseconds() == 0 {
+		return -1
+	}
+
+	// Return speed in KB/s
+	return totalBytes / int64(actualDuration.Milliseconds()) * 1000 / 1024
+}
+
+// PerformBandwidthTest runs comprehensive bandwidth and latency tests
+func (c *Client) PerformBandwidthTest(ctx context.Context) *BandwidthTestResult {
+	// Use speed.cloudflare.com for testing - it's designed for bandwidth testing
+	downloadURL := "https://speed.cloudflare.com/__down?bytes=2097152" // 2MB download
+	uploadURL := "https://speed.cloudflare.com/__up"                   // POST endpoint
+	latencyURL := "https://speed.cloudflare.com/__ping"                // Simple HEAD request
+
+	result := &BandwidthTestResult{}
+
+	// Test latency (quick test)
+	result.LatencyMs = c.TestLatency(ctx, latencyURL)
+
+	// Test download speed (10 seconds)
+	result.DownloadSpeedKBps = c.TestDownloadSpeed(ctx, downloadURL, 10)
+
+	// Test upload speed (10 seconds)
+	result.UploadSpeedKBps = c.TestUploadSpeed(ctx, uploadURL, 10)
+
+	// Check for any failures
+	if result.LatencyMs == -1 || result.DownloadSpeedKBps == -1 || result.UploadSpeedKBps == -1 {
+		result.Error = &platerrors.PlatformError{
+			Code:    platerrors.InternalError,
+			Message: "bandwidth test failed",
+		}
+	}
+
+	return result
 }
 
 // ClientConfig is used to create the Client.

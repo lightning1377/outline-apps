@@ -43,7 +43,7 @@ NSString *const kDefaultPathKey = @"defaultPath";
 
 - (id)init {
   self = [super init];
-  NSString *appGroup = @"group.org.getoutline.client";
+  NSString *appGroup = @"group.org.cloudtree.getoutline.client";
   NSURL *containerUrl = [[NSFileManager defaultManager]
                          containerURLForSecurityApplicationGroupIdentifier:appGroup];
   NSString *logsDirectory = [[containerUrl path] stringByAppendingPathComponent:@"Logs"];
@@ -53,7 +53,7 @@ NSString *const kDefaultPathKey = @"defaultPath";
   [DDLog addLogger:[DDOSLogger sharedInstance]];
   [DDLog addLogger:_fileLogger];
 
-  _packetQueue = dispatch_queue_create("org.getoutline.packetqueue", DISPATCH_QUEUE_SERIAL);
+  _packetQueue = dispatch_queue_create("org.cloudtree.getoutline.packetqueue", DISPATCH_QUEUE_SERIAL);
 
   return self;
 }
@@ -315,15 +315,134 @@ bool getIpAddressString(const struct sockaddr *sa, char *s, socklen_t maxbytes) 
 // TODO: Remove this code once we only support newer systems (macOS 13.0+, iOS 16.0+)
 
 NSString *const kFetchLastErrorIPCName = @"fetchLastDisconnectDetailedJsonError";
+NSString *const kComprehensiveTestIPCPrefix = @"comprehensiveTest:";
 
 - (void)handleAppMessage:(NSData *)messageData completionHandler:(void (^)(NSData * _Nullable))completion {
-  // mimics fetchLastDisconnectErrorWithCompletionHandler on older systems
-  NSString *ipcName = [[NSString alloc] initWithData:messageData encoding:NSUTF8StringEncoding];
-  if (![ipcName isEqualToString:kFetchLastErrorIPCName]) {
-    DDLogWarn(@"Invalid Extension IPC call: %@", ipcName);
-    return completion(nil);
+  @try {
+    NSString *message = [[NSString alloc] initWithData:messageData encoding:NSUTF8StringEncoding];
+    
+    // Check if this is a comprehensive test request
+    if ([message hasPrefix:kComprehensiveTestIPCPrefix]) {
+      NSString *transportConfig = [message substringFromIndex:[kComprehensiveTestIPCPrefix length]];
+      if (transportConfig.length > 0) {
+        [self performComprehensiveTest:transportConfig completionHandler:completion];
+        return;
+      } else {
+        DDLogError(@"Empty transport config for comprehensive test");
+        completion(nil);
+        return;
+      }
+    }
+    
+    if ([message isEqualToString:kFetchLastErrorIPCName]) {
+      // mimics fetchLastDisconnectErrorWithCompletionHandler on older systems
+      completion([SwiftBridge loadLastErrorToIPCResponse]);
+      return;
+    }
+    
+    DDLogWarn(@"Unknown Extension IPC call: %@", message);
+    completion(nil);
+  } @catch (NSException *exception) {
+    DDLogError(@"Exception in handleAppMessage: %@", exception.reason);
+    completion(nil);
   }
-  completion([SwiftBridge loadLastErrorToIPCResponse]);
+}
+
+// Performs comprehensive connectivity and bandwidth test without establishing VPN routing
+- (void)performComprehensiveTest:(NSString *)transportConfig 
+               completionHandler:(void (^)(NSData * _Nullable))completion {
+  DDLogInfo(@"Performing comprehensive connectivity and bandwidth test without VPN routing");
+  
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    @try {
+      // Create Outline client for testing
+      OutlineNewClientResult* clientResult = [SwiftBridge newClientWithTransportConfig:transportConfig];
+      if (clientResult.error != nil) {
+        DDLogWarn(@"Failed to create Outline Client for testing: %@", clientResult.error);
+        [self sendTestResult:@{
+          @"tcpSuccess": @NO,
+          @"udpSuccess": @NO,
+          @"connectivitySuccess": @NO,
+          @"downloadSpeedKBps": @0,
+          @"uploadSpeedKBps": @0,
+          @"latencyMs": @0,
+          @"downloadTestSuccess": @NO,
+          @"uploadTestSuccess": @NO,
+          @"tcpError": clientResult.error.message ?: @"Failed to create client",
+          @"udpError": [NSNull null],
+          @"downloadTestError": [NSNull null],
+          @"uploadTestError": [NSNull null]
+        } completion:completion];
+        return;
+      }
+      
+      // Use the new comprehensive test from Go client
+      OutlineComprehensiveTestResult *testResult = OutlinePerformComprehensiveTest(clientResult.client);
+      
+      BOOL tcpSuccess = testResult.tcpError == nil;
+      BOOL udpSuccess = testResult.udpError == nil;
+      BOOL downloadSuccess = testResult.bandwidthError == nil && tcpSuccess;
+      BOOL uploadSuccess = testResult.bandwidthError == nil && tcpSuccess;
+      
+      NSMutableDictionary *results = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"tcpSuccess": @(tcpSuccess),
+        @"udpSuccess": @(udpSuccess),
+        @"connectivitySuccess": @(tcpSuccess),
+        @"downloadSpeedKBps": @(testResult.downloadSpeedKBps),
+        @"uploadSpeedKBps": @(testResult.uploadSpeedKBps),
+        @"latencyMs": @(testResult.latencyMs),
+        @"downloadTestSuccess": @(downloadSuccess),
+        @"uploadTestSuccess": @(uploadSuccess),
+        @"tcpError": tcpSuccess ? [NSNull null] : (testResult.tcpError.message ?: @"TCP connection failed"),
+        @"udpError": udpSuccess ? [NSNull null] : (testResult.udpError.message ?: @"UDP connection failed"),
+        @"downloadTestError": downloadSuccess ? [NSNull null] : (testResult.bandwidthError.message ?: @"Download test failed"),
+        @"uploadTestError": uploadSuccess ? [NSNull null] : (testResult.bandwidthError.message ?: @"Upload test failed")
+      }];
+      
+      DDLogInfo(@"Comprehensive test completed: TCP=%d, UDP=%d, Download=%lld KB/s, Upload=%lld KB/s, Latency=%lld ms", 
+                tcpSuccess, udpSuccess, testResult.downloadSpeedKBps, testResult.uploadSpeedKBps, testResult.latencyMs);
+      
+      [self sendTestResult:results completion:completion];
+      
+    } @catch (NSException *exception) {
+      DDLogError(@"Comprehensive test failed: %@", exception.reason);
+      [self sendTestResult:@{
+        @"tcpSuccess": @NO,
+        @"udpSuccess": @NO,
+        @"connectivitySuccess": @NO,
+        @"downloadSpeedKBps": @0,
+        @"uploadSpeedKBps": @0,
+        @"latencyMs": @0,
+        @"downloadTestSuccess": @NO,
+        @"uploadTestSuccess": @NO,
+        @"tcpError": exception.reason ?: @"Comprehensive test failed",
+        @"udpError": [NSNull null],
+        @"downloadTestError": [NSNull null],
+        @"uploadTestError": [NSNull null]
+      } completion:completion];
+    }
+  });
+}
+
+// Helper method to encode and send test results
+- (void)sendTestResult:(NSDictionary *)testResults 
+            completion:(void (^)(NSData * _Nullable))completion {
+  @try {
+    NSError *encodeError = nil;
+    NSData *responseData = [NSPropertyListSerialization dataWithPropertyList:testResults
+                                                                      format:NSPropertyListBinaryFormat_v1_0
+                                                                     options:0
+                                                                       error:&encodeError];
+    if (encodeError) {
+      DDLogError(@"Failed to encode test results: %@", encodeError.localizedDescription);
+      completion(nil);
+    } else {
+      completion(responseData);
+    }
+  } @catch (NSException *exception) {
+    DDLogError(@"Exception encoding test results: %@", exception.reason);
+    completion(nil);
+  }
 }
 
 - (void)cancelTunnelWithError:(nullable NSError *)error {

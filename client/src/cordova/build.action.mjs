@@ -43,6 +43,15 @@ export async function main(...parameters) {
     );
   }
 
+  // Set ANDROID_NDK environment variable for Android builds
+  if (
+    platform === 'android' &&
+    process.env.ANDROID_HOME &&
+    !process.env.ANDROID_NDK
+  ) {
+    process.env.ANDROID_NDK = path.resolve(process.env.ANDROID_HOME, 'ndk');
+  }
+
   await runAction('client/src/www/build', ...parameters);
   await runAction('client/go/build', ...parameters);
   await runAction('client/src/cordova/setup', ...parameters);

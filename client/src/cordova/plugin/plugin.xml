@@ -40,6 +40,7 @@
       <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
       <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
       <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+      <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     </config-file>
 
     <config-file target="app/src/main/AndroidManifest.xml" parent="/manifest/application">

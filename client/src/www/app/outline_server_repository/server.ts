@@ -36,7 +36,8 @@ export async function newOutlineServer(
   id: string,
   name: string | undefined,
   accessKey: string,
-  localize: Localizer
+  localize: Localizer,
+  rowId?: string
 ): Promise<Server> {
   const serviceConfig = await parseAccessKey(accessKey);
   name = name ?? serviceConfig.name;
@@ -52,7 +53,7 @@ export async function newOutlineServer(
               tunnelConfigLocation.port
             );
     }
-    const server = new OutlineServer(vpnApi, id, name, serviceConfig);
+    const server = new OutlineServer(vpnApi, id, name, serviceConfig, rowId);
     return server;
   } else if (serviceConfig instanceof StaticServiceConfig) {
     if (!name) {
@@ -62,23 +63,26 @@ export async function newOutlineServer(
           : 'server-default-name'
       );
     }
-    return new OutlineServer(vpnApi, id, name, serviceConfig);
+    return new OutlineServer(vpnApi, id, name, serviceConfig, rowId);
   }
 }
 
 class OutlineServer implements Server {
   errorMessageId?: string;
   private tunnelConfig?: FirstHopAndTunnelConfigJson;
+  readonly rowId?: string;
 
   constructor(
     private vpnApi: VpnApi,
     readonly id: string,
     public name: string,
-    private serviceConfig: ServiceConfig
+    private serviceConfig: ServiceConfig,
+    rowId?: string
   ) {
     if (serviceConfig instanceof StaticServiceConfig) {
       this.tunnelConfig = serviceConfig.tunnelConfig;
     }
+    this.rowId = rowId;
   }
 
   get address() {

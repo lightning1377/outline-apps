@@ -35,6 +35,14 @@ export interface ServerListItem {
   id: string;
   name: string;
   connectionState: ServerConnectionState;
+  // Speed test results
+  downloadSpeedKBps?: number;
+  uploadSpeedKBps?: number;
+  latencyMs?: number;
+  speedTestSuccess?: boolean;
+  speedTestError?: string;
+  // Speed test state
+  isTesting?: boolean;
 }
 
 /**

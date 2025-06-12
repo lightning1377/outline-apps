@@ -125,7 +125,9 @@ const sharedCSS = css`
     box-sizing: border-box;
     grid-area: footer;
     padding: var(--outline-mini-gutter) var(--outline-gutter);
-    text-align: end;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   .card-error {
@@ -137,6 +139,71 @@ const sharedCSS = css`
     --md-sys-color-primary: var(--outline-primary);
 
     text-transform: uppercase;
+  }
+
+  .test-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .test-button md-circular-progress {
+    --md-circular-progress-size: 16px;
+    --md-circular-progress-active-indicator-color: var(--outline-primary);
+  }
+
+  .test-button:disabled {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  .card-metadata-speed-test {
+    margin-top: var(--outline-mini-gutter);
+  }
+
+  .speed-test-result {
+    font-size: 0.75rem;
+    font-family: var(--outline-font-family);
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+
+  .speed-test-result > span {
+    font-size: 0.75rem;
+  }
+
+  .speed-test-result.success {
+    background-color: rgba(76, 175, 80, 0.1);
+    color: #4caf50;
+  }
+
+  .speed-test-result.error {
+    background-color: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+  }
+
+  .speed-test-latency {
+    font-weight: 500;
+  }
+
+  .speed-test-separator {
+    margin: 0 4px;
+    opacity: 0.7;
+  }
+
+  .speed-test-download {
+    color: #4caf50;
+    font-weight: 500;
+  }
+
+  .speed-test-upload {
+    color: #2196f3;
+    font-weight: 500;
+  }
+
+  .speed-test-legacy {
+    color: inherit;
   }
 `;
 
@@ -192,6 +259,14 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
           }
         )
       ),
+    testSpeed: () =>
+      element.dispatchEvent(
+        new CustomEvent('TestServerSpeedRequested', {
+          detail: {serverId: server.id},
+          bubbles: true,
+          composed: true,
+        })
+      ),
   };
 
   const handleMenuOpen = () => {
@@ -219,6 +294,42 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
             ${messages.serverName}
           </h2>
           <label class="card-metadata-server-address">${server.address}</label>
+          ${server.latencyMs !== undefined
+            ? html`
+                <div class="card-metadata-speed-test">
+                  <span
+                    class="speed-test-result ${server.speedTestSuccess
+                      ? 'success'
+                      : 'error'}"
+                  >
+                    ${server.speedTestSuccess
+                      ? html`
+                          <span class="speed-test-latency"
+                            >${server.latencyMs}ms</span
+                          >
+                          ${server.downloadSpeedKBps !== undefined &&
+                          server.uploadSpeedKBps !== undefined
+                            ? html`
+                                <span class="speed-test-separator">•</span>
+                                <span class="speed-test-download"
+                                  >↓${server.downloadSpeedKBps} KB/s</span
+                                >
+                                <span class="speed-test-separator">•</span>
+                                <span class="speed-test-upload"
+                                  >↑${server.uploadSpeedKBps} KB/s</span
+                                >
+                              `
+                            : ''}
+                        `
+                      : localize(
+                          'speed-test-failed-short',
+                          'error',
+                          server.speedTestError || 'Unknown error'
+                        )}
+                  </span>
+                </div>
+              `
+            : ''}
         </div>
       `,
       menu: html`
@@ -247,6 +358,20 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
       `,
       footer: html`
         <footer class="card-footer">
+          <md-text-button
+            class="card-footer-button test-button"
+            @click="${dispatchers.testSpeed}"
+            title="${localize('test-server-speed')}"
+            ?disabled=${server.isTesting}
+          >
+            ${server.isTesting
+              ? html`<md-circular-progress
+                  slot="icon"
+                  indeterminate
+                ></md-circular-progress>`
+              : html`<md-icon slot="icon">speed</md-icon>`}
+            ${localize('server-test-speed')}
+          </md-text-button>
           <span class="card-error">${messages.error}</span>
           <md-text-button
             class="card-footer-button"

@@ -15,9 +15,18 @@
 import {Localizer} from '@outline/infrastructure/i18n';
 import {OperationTimedOut} from '@outline/infrastructure/timeout_promise';
 
+import {VPNManagementAPI, ServerTestResult} from './api_server_repository';
 import {Clipboard} from './clipboard';
 import {EnvironmentVariables} from './environment';
+import {NetworkChangeDetector} from './network_change_detector';
 import * as config from './outline_server_repository/config';
+import {pluginExec} from './plugin.cordova';
+import {ServerLogsHandler, LogType} from './server_logs_handler';
+import {
+  ServerTestService,
+  ServerTestCallbacks,
+  TestMode,
+} from './server_test_service';
 import {Settings, SettingsKey, Appearance} from './settings';
 import {Updater} from './updater';
 import {UrlInterceptor} from './url_interceptor';
@@ -85,6 +94,10 @@ export class App {
   private localize: Localizer;
   private ignoredAccessKeys: {[accessKey: string]: boolean} = {};
   private serverConnectionChangeTimeouts: {[serverId: string]: boolean} = {};
+  private vpnApi: VPNManagementAPI = new VPNManagementAPI();
+  private serverLogsHandler: ServerLogsHandler;
+  private networkChangeDetector: NetworkChangeDetector;
+  private serverTestService: ServerTestService;
 
   // Feature flag to control whether dark mode is enabled
   // When set to true, the theme option will appear in the navigation menu
@@ -189,6 +202,26 @@ export class App {
       'SetLanguageRequested',
       this.setAppLanguage.bind(this)
     );
+    this.rootEl.addEventListener(
+      'ConfigureApiRequested',
+      this.configureApi.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'FetchApiServersRequested',
+      this.fetchApiServers.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'TestServerSpeedRequested',
+      this.testServerSpeed.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'TestAllServersRequested',
+      this.testAllServers.bind(this)
+    );
+    this.rootEl.addEventListener(
+      'SetTestModeRequested',
+      this.setTestMode.bind(this)
+    );
 
     if (this.appearanceFeatureEnabled) {
       this.rootEl.showAppearanceView = true;
@@ -252,9 +285,91 @@ export class App {
     };
     if (!this.arePrivacyTermsAcked()) {
       this.displayPrivacyView();
-    } else if (this.rootEl.$.serversView.shouldShowZeroState) {
-      this.rootEl.$.addServerView.open = true;
     }
+
+    // Initialize API configuration from stored settings
+    const storedApiUrl = this.settings.get(SettingsKey.API_URL);
+    const storedApiPassword = this.settings.get(SettingsKey.API_PASSWORD);
+    if (storedApiUrl && storedApiPassword) {
+      this.vpnApi.setApiConfig(storedApiUrl, storedApiPassword);
+    }
+
+    // Pass stored API credentials to the UI
+    this.rootEl.storedApiUrl = storedApiUrl || '';
+    this.rootEl.storedApiPassword = storedApiPassword || '';
+
+    // Initialize logging system
+    this.serverLogsHandler = ServerLogsHandler.getInstance(this.vpnApi);
+    this.networkChangeDetector = new NetworkChangeDetector(
+      this.serverRepo,
+      30000,
+      ispInfo => {
+        this.serverLogsHandler.setISPInfo(ispInfo);
+      },
+      environmentVars.IPGEOLOCATION_API_KEY
+    );
+
+    // Initialize server test service
+    const serverTestCallbacks: ServerTestCallbacks = {
+      onTestStart: (serverId: string) => {
+        this.updateServerListItem(serverId, {isTesting: true});
+      },
+      onTestComplete: (serverId: string, result: ServerTestResult) => {
+        this.updateServerListItem(serverId, {
+          downloadSpeedKBps: result.downloadSpeedKBps,
+          uploadSpeedKBps: result.uploadSpeedKBps,
+          latencyMs: result.latencyMs,
+          speedTestSuccess: result.success,
+          speedTestError: result.error,
+          isTesting: false,
+        });
+      },
+      onTestError: (serverId: string, error: Error) => {
+        this.updateServerListItem(serverId, {
+          isTesting: false,
+        });
+        this.showLocalizedError(error);
+      },
+      onAllTestsComplete: (results: ServerTestResult[]) => {
+        const successfulTests = results.filter(r => r.success).length;
+        this.rootEl.showToast(
+          this.localize(
+            'all-speed-tests-complete',
+            'successful',
+            String(successfulTests),
+            'total',
+            String(results.length)
+          )
+        );
+      },
+      onServerConnectionChange: (serverId: string, connected: boolean) => {
+        this.updateServerListItem(serverId, {
+          connectionState: connected
+            ? ServerConnectionState.CONNECTED
+            : ServerConnectionState.DISCONNECTED,
+        });
+      },
+    };
+
+    this.serverTestService = new ServerTestService(
+      this.vpnApi,
+      this.serverRepo,
+      this.serverLogsHandler,
+      serverTestCallbacks,
+      TestMode.AUTO // Use AUTO mode by default for best performance
+    );
+
+    // Request notification permission for Android 13+
+    this.requestNotificationPermissionIfNeeded().catch(error => {
+      console.warn('Failed to request notification permission:', error);
+    });
+
+    // Ensure cleanup on window close
+    window.addEventListener('beforeunload', () => {
+      this.cleanup().catch(error => {
+        console.error('Error during cleanup:', error);
+      });
+    });
   }
 
   showLocalizedError(error?: Error, toastDuration = 10000) {
@@ -399,7 +514,7 @@ export class App {
   private ackPrivacyTerms() {
     this.rootEl.$.serversView.hidden = false;
     this.rootEl.$.privacyView.open = false;
-    this.rootEl.$.addServerView.open = true;
+    this.rootEl.showApiConfigDialog = true;
     this.settings.set(SettingsKey.PRIVACY_ACK, 'true');
   }
 
@@ -557,6 +672,12 @@ export class App {
         address: server.address,
       });
       console.log(`connected to server ${serverId}`);
+
+      if (server.rowId) {
+        // Log successful connection
+        this.serverLogsHandler.addLog(server.rowId, LogType.CONNECTED, true);
+      }
+
       this.rootEl.showToast(
         this.localize('server-connected', 'serverName', server.name)
       );
@@ -566,6 +687,12 @@ export class App {
         connectionState: ServerConnectionState.DISCONNECTED,
       });
       console.error(`could not connect to server ${serverId}: ${e}`);
+
+      if (server.rowId) {
+        // Log failed connection
+        this.serverLogsHandler.addLog(server.rowId, LogType.CONNECTED, false);
+      }
+
       if (
         e instanceof errors.ProxyConnectionFailure &&
         e.cause instanceof errors.SystemConfigurationException
@@ -666,6 +793,12 @@ export class App {
       );
 
       console.log(`disconnected from server ${serverId}`);
+
+      // Log successful disconnection
+      if (server.rowId) {
+        this.serverLogsHandler.addLog(server.rowId, LogType.DISCONNECTED, true);
+      }
+
       this.rootEl.showToast(
         this.localize('server-disconnected', 'serverName', server.name)
       );
@@ -673,6 +806,16 @@ export class App {
       this.updateServerListItem(serverId, {
         connectionState: ServerConnectionState.CONNECTED,
       });
+
+      // Log failed disconnection
+      if (server.rowId) {
+        this.serverLogsHandler.addLog(
+          server.rowId,
+          LogType.DISCONNECTED,
+          false
+        );
+      }
+
       this.showLocalizedError(e);
       console.warn(`could not disconnect from server ${serverId}: ${e.name}`);
     }
@@ -904,5 +1047,124 @@ export class App {
     }
 
     this.rootEl.selectedAppearance = appearance;
+  }
+
+  //#region API Management methods
+
+  private configureApi(event: CustomEvent) {
+    const {apiUrl, apiPassword} = event.detail;
+    this.vpnApi.setApiConfig(apiUrl, apiPassword);
+    this.rootEl.showToast(this.localize('api-configured'));
+    // Store API configuration in settings for persistence
+    this.settings.set(SettingsKey.API_URL, apiUrl);
+    this.settings.set(SettingsKey.API_PASSWORD, apiPassword);
+    // Update stored values in the UI
+    this.rootEl.storedApiUrl = apiUrl;
+    this.rootEl.storedApiPassword = apiPassword;
+  }
+
+  private async fetchApiServers(_event: CustomEvent) {
+    try {
+      this.rootEl.showToast(this.localize('fetching-servers'));
+      const response = await this.vpnApi.fetchServers();
+
+      if (response.status !== 200) {
+        throw new Error(response.message || 'Failed to fetch servers');
+      }
+
+      if (response.data && response.data.length > 0) {
+        let successfulAdds = 0;
+
+        // Add each server from the API response
+        for (const serverData of response.data) {
+          try {
+            const accessKey = serverData.server_link;
+            // Validate that it's a proper Outline access key before adding
+            if (isOutlineAccessKey(accessKey)) {
+              await this.serverRepo.add(accessKey, serverData.row_id);
+              successfulAdds++;
+            } else {
+              console.warn(
+                `Invalid access key format for server ${serverData.row_id}: ${accessKey}`
+              );
+            }
+          } catch (error) {
+            console.warn(
+              `Failed to add server ${serverData.row_id} with access key ${serverData.server_link}:`,
+              error
+            );
+          }
+        }
+
+        if (successfulAdds > 0) {
+          this.rootEl.showToast(
+            this.localize('servers-fetched', 'count', String(successfulAdds))
+          );
+        } else {
+          this.rootEl.showToast(this.localize('no-valid-servers-added'));
+        }
+      } else {
+        this.rootEl.showToast(this.localize('no-servers-available'));
+      }
+    } catch (error) {
+      this.showLocalizedError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private async testServerSpeed(event: CustomEvent) {
+    const {serverId} = event.detail;
+    await this.serverTestService.testServerSpeed(serverId);
+  }
+
+  private async testAllServers(_event: CustomEvent) {
+    try {
+      const servers = this.serverRepo.getAll();
+      if (servers.length === 0) {
+        this.rootEl.showToast(this.localize('no-servers-to-test'));
+        return;
+      }
+
+      this.rootEl.showToast(this.localize('testing-all-servers'));
+      await this.serverTestService.testAllServers();
+    } catch (error) {
+      this.showLocalizedError(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  private setTestMode(event: CustomEvent) {
+    const {mode} = event.detail;
+    if (Object.values(TestMode).includes(mode)) {
+      this.serverTestService.setTestMode(mode);
+      this.rootEl.showToast(this.localize('test-mode-changed', 'mode', mode));
+    }
+  }
+
+  private async requestNotificationPermissionIfNeeded() {
+    // Only request on android platform
+    if ('cordova' in window && window.cordova.platformId === 'android') {
+      console.log('Requesting notification permission...');
+      const result = await pluginExec<string>('requestNotificationPermission');
+      console.log('Notification permission result:', result);
+    }
+  }
+
+  //#endregion API Management methods
+
+  public async cleanup(): Promise<void> {
+    // Stop logging components
+    if (this.networkChangeDetector) {
+      this.networkChangeDetector.stop();
+    }
+
+    if (this.serverLogsHandler) {
+      await this.serverLogsHandler.stop();
+    }
+
+    // Cleanup singleton
+    await ServerLogsHandler.cleanup();
   }
 }

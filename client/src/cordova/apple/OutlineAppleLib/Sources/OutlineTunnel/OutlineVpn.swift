@@ -31,6 +31,7 @@ public class OutlineVpn: NSObject {
     static let restart = "restart"
     static let stop = "stop"
     static let getTunnelId = "getTunnelId"
+    static let testConnectivity = "testConnectivity"
   }
 
   private enum ConfigKey {
@@ -161,11 +162,133 @@ public class OutlineVpn: NSObject {
     return getTunnelId(forManager: manager) == tunnelId && isActiveSession(manager.connection)
   }
 
+  /** Performs comprehensive test including real bandwidth measurement without establishing VPN routing. */
+  public func performComprehensiveTest(withTransport transportConfig: String) async throws -> [String: Any] {
+    DDLogInfo("Performing comprehensive test without VPN routing")
+    
+    // Try to use existing VPN extension if available, otherwise create a temporary one
+    var manager: NETunnelProviderManager?
+    let shouldCleanup: Bool
+    
+    if let existingManager = await getTunnelManager() {
+      manager = existingManager
+      shouldCleanup = false
+      DDLogDebug("Using existing VPN manager for comprehensive test")
+    } else {
+      // Create a temporary VPN configuration just for testing
+      do {
+        manager = try await setupTestVpn(withTransport: transportConfig)
+        shouldCleanup = true
+        DDLogDebug("Created temporary VPN manager for comprehensive test")
+      } catch {
+        DDLogError("Failed to setup test VPN configuration: \(error.localizedDescription)")
+        throw OutlineError.vpnPermissionNotGranted(cause: error)
+      }
+    }
+    
+    guard let vpnManager = manager else {
+      throw OutlineError.internalError(message: "Failed to get VPN manager for testing")
+    }
+    
+    do {
+      let testResults = try await performComprehensiveTestViaExtension(manager: vpnManager, transportConfig: transportConfig)
+      
+      // Clean up temporary configuration if we created one
+      if shouldCleanup {
+        try? await vpnManager.removeFromPreferences()
+      }
+      
+      return testResults
+    } catch {
+      // Clean up on error
+      if shouldCleanup {
+        try? await vpnManager.removeFromPreferences()
+      }
+      throw error
+    }
+  }
+
   // MARK: - Helpers
 
   public func stopActiveVpn() async {
     if let manager = await getTunnelManager() {
       await stopSession(manager)
+    }
+  }
+
+  // Creates a temporary VPN configuration for testing purposes only
+  private func setupTestVpn(withTransport transportConfig: String) async throws -> NETunnelProviderManager {
+    let manager = NETunnelProviderManager()
+    manager.localizedDescription = "Outline Test Configuration"
+    manager.onDemandRules = nil // Disable on-demand for testing
+    
+    let config = NETunnelProviderProtocol()
+    config.serverAddress = "Outline-Test"
+    config.providerBundleIdentifier = OutlineVpn.kVpnExtensionBundleId
+    config.providerConfiguration = [
+      ConfigKey.tunnelId: "test-\(UUID().uuidString)",
+      ConfigKey.transport: transportConfig
+    ]
+    manager.protocolConfiguration = config
+    manager.isEnabled = true
+    
+    try await manager.saveToPreferences()
+    try await manager.loadFromPreferences()
+    return manager
+  }
+
+  // Performs comprehensive test via VPN extension IPC
+  private func performComprehensiveTestViaExtension(manager: NETunnelProviderManager, transportConfig: String) async throws -> [String: Any] {
+    // We need a session to communicate with the extension
+    let session = manager.connection as! NETunnelProviderSession
+    
+    // Prepare the IPC request with transport config inline
+    let ipcMessage = "comprehensiveTest:\(transportConfig)"
+    guard let requestData = ipcMessage.data(using: .utf8) else {
+      throw OutlineError.internalError(message: "Failed to create IPC request data")
+    }
+    
+    return try await withCheckedThrowingContinuation { continuation in
+      do {
+        DDLogDebug("Sending comprehensive test request to VPN extension")
+        try session.sendProviderMessage(requestData) { responseData in
+          guard let data = responseData else {
+            DDLogError("Extension comprehensive test returned nil")
+            continuation.resume(throwing: OutlineError.internalError(message: "Extension test returned no data"))
+            return
+          }
+          
+          do {
+            // Decode the response using the proper data structure
+            let testResult = try PropertyListDecoder().decode(ComprehensiveTestResult.self, from: data)
+            DDLogInfo("Extension comprehensive test completed: TCP=\(testResult.tcpSuccess), UDP=\(testResult.udpSuccess), Download=\(testResult.downloadSpeedKBps) KB/s, Upload=\(testResult.uploadSpeedKBps) KB/s, Latency=\(testResult.latencyMs) ms")
+            
+            // Convert to dictionary for return
+            let resultDict: [String: Any] = [
+              "tcpSuccess": testResult.tcpSuccess,
+              "udpSuccess": testResult.udpSuccess,
+              "connectivitySuccess": testResult.connectivitySuccess,
+              "downloadSpeedKBps": testResult.downloadSpeedKBps,
+              "uploadSpeedKBps": testResult.uploadSpeedKBps,
+              "latencyMs": testResult.latencyMs,
+              "downloadTestSuccess": testResult.downloadTestSuccess,
+              "uploadTestSuccess": testResult.uploadTestSuccess,
+              "tcpError": testResult.tcpError as Any,
+              "udpError": testResult.udpError as Any,
+              "downloadTestError": testResult.downloadTestError as Any,
+              "uploadTestError": testResult.uploadTestError as Any
+            ]
+            
+            continuation.resume(returning: resultDict)
+          } catch {
+            DDLogError("Failed to decode extension test results: \(error)")
+            continuation.resume(throwing: error)
+          }
+        }
+      } catch {
+        DDLogError("Failed to send test request to extension: \(error)")
+        continuation.resume(throwing: error)
+      }
     }
   }
 
@@ -310,6 +433,22 @@ private enum ExtensionIPC {
 private struct LastErrorIPCData: Decodable {
   let errorCode: String
   let errorJson: String
+}
+
+/// Data structure for comprehensive test results from VPN extension
+private struct ComprehensiveTestResult: Decodable {
+  let tcpSuccess: Bool
+  let udpSuccess: Bool
+  let connectivitySuccess: Bool
+  let downloadSpeedKBps: Int
+  let uploadSpeedKBps: Int
+  let latencyMs: Int
+  let downloadTestSuccess: Bool
+  let uploadTestSuccess: Bool
+  let tcpError: String?
+  let udpError: String?
+  let downloadTestError: String?
+  let uploadTestError: String?
 }
 
 // Fetches the most recent error that caused the VPN extension to disconnect.

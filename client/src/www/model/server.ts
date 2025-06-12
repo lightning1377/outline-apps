@@ -32,6 +32,9 @@ export interface Server {
   // must match one of the localized app message.
   errorMessageId?: string;
 
+  // The row ID from the API, if this server was added from the API.
+  rowId?: string;
+
   // Connects to the server, redirecting the device's traffic.
   connect(): Promise<void>;
 
@@ -43,7 +46,7 @@ export interface Server {
 }
 
 export interface ServerRepository {
-  add(accessKey: string): Promise<void>;
+  add(accessKey: string, rowId?: string): Promise<void>;
   rename(serverId: string, name: string): void;
   forget(serverId: string): void;
   undoForget(serverId: string): void;

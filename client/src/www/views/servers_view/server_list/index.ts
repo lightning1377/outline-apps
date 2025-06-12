@@ -42,6 +42,28 @@ export class ServerList extends LitElement {
       server-hero-card {
         height: 400px;
       }
+
+      .test-all-container {
+        display: flex;
+        justify-content: center;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        padding: 8px;
+      }
+
+      .test-all-button {
+        --md-filled-button-container-color: var(--outline-primary);
+        --md-filled-button-label-text-color: var(--outline-white);
+      }
+
+      .test-all-button md-circular-progress {
+        --md-circular-progress-size: 16px;
+        --md-circular-progress-active-indicator-color: var(--outline-white);
+      }
+
+      .test-all-button:disabled {
+        opacity: 0.7;
+      }
     `,
   ];
 
@@ -65,11 +87,47 @@ export class ServerList extends LitElement {
               .server=${server}
             ></server-row-card>`
         )}
+        ${this.hasMultipleServers
+          ? html`
+              <div class="test-all-container">
+                <md-filled-button
+                  class="test-all-button"
+                  @click=${this.testAllServers}
+                  ?disabled=${this.isAnyServerTesting}
+                >
+                  ${this.isAnyServerTesting
+                    ? html`<md-circular-progress
+                        slot="icon"
+                        indeterminate
+                      ></md-circular-progress>`
+                    : html`<md-icon slot="icon">speed</md-icon>`}
+                  ${this.localize('test-all-servers-speed')}
+                </md-filled-button>
+              </div>
+            `
+          : ''}
       `;
     }
   }
 
   private get hasSingleServer() {
     return this.servers.length === 1;
+  }
+
+  private get hasMultipleServers() {
+    return this.servers.length > 1;
+  }
+
+  private get isAnyServerTesting() {
+    return this.servers.some(server => server.isTesting);
+  }
+
+  private testAllServers() {
+    this.dispatchEvent(
+      new CustomEvent('TestAllServersRequested', {
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 }

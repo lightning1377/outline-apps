@@ -50,7 +50,7 @@ class OutlinePlugin: CDVPlugin {
 #else
   private static let kPlatform = "iOS"
 #endif
-  private static let kAppGroup = "group.org.getoutline.client"
+  private static let kAppGroup = "group.org.cloudtree.getoutline.client"
 
   override func pluginInitialize() {
 #if DEBUG
@@ -141,6 +141,29 @@ class OutlinePlugin: CDVPlugin {
     DDLogInfo("isRunning \(tunnelId)")
     Task {
       self.sendSuccess(await OutlineVpn.shared.isActive(tunnelId), callbackId: command.callbackId)
+    }
+  }
+
+  func testServerConnectivity(_ command: CDVInvokedUrlCommand) {
+    guard let transportConfig = command.argument(at: 0) as? String else {
+      return sendError("Missing transport configuration", callbackId: command.callbackId)
+    }
+    DDLogInfo("testServerConnectivity with config: \(transportConfig)")
+    Task {
+      do {
+        let testResults = try await OutlineVpn.shared.performComprehensiveTest(withTransport: transportConfig)
+        // Convert test results to JSON string for return
+        if let jsonData = try? JSONSerialization.data(withJSONObject: testResults, options: []),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+          self.sendSuccess(jsonString, callbackId: command.callbackId)
+        } else {
+          self.sendError("Failed to serialize test results", callbackId: command.callbackId)
+        }
+      } catch {
+        let errorJson = marshalErrorJson(error: error)
+        DDLogError("testServerConnectivity failed: \(errorJson)")
+        self.sendError(errorJson, callbackId: command.callbackId)
+      }
     }
   }
 
