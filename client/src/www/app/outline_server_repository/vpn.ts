@@ -46,4 +46,7 @@ export interface VpnApi {
 
   /** Sets a listener, to be called when the tunnel status changes. */
   onStatusChange(listener: (id: string, status: TunnelStatus) => void): void;
+
+  /** Requests notification permission (Android 13+ only). Returns a promise that resolves to permission status. */
+  requestNotificationPermission?(): Promise<string>;
 }

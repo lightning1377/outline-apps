@@ -60,4 +60,14 @@ interface IVpnTunnelService {
    * @param apiKey Sentry API key.
    */
   void initErrorReporting(String apiKey);
+
+  /**
+   * Tests server connectivity and bandwidth without establishing VPN routing.
+   * Creates an Outline client and tests TCP/UDP connectivity through the proxy
+   * without routing system traffic. This allows for fast server testing.
+   *
+   * @param transportConfig the transport configuration for the server to test.
+   * @return JSON string containing test results on success, or null on error.
+   */
+  String testServerConnectivity(String transportConfig);
 }

@@ -20,7 +20,13 @@ import {Clipboard} from './clipboard';
 import {EnvironmentVariables} from './environment';
 import {NetworkChangeDetector} from './network_change_detector';
 import * as config from './outline_server_repository/config';
+import {pluginExec} from './plugin.cordova';
 import {ServerLogsHandler, LogType} from './server_logs_handler';
+import {
+  ServerTestService,
+  ServerTestCallbacks,
+  TestMode,
+} from './server_test_service';
 import {Settings, SettingsKey, Appearance} from './settings';
 import {Updater} from './updater';
 import {UrlInterceptor} from './url_interceptor';
@@ -89,10 +95,9 @@ export class App {
   private ignoredAccessKeys: {[accessKey: string]: boolean} = {};
   private serverConnectionChangeTimeouts: {[serverId: string]: boolean} = {};
   private vpnApi: VPNManagementAPI = new VPNManagementAPI();
-  private serverTestResults: Map<string, ServerTestResult> = new Map();
-  private serversCurrentlyTesting: Set<string> = new Set();
   private serverLogsHandler: ServerLogsHandler;
   private networkChangeDetector: NetworkChangeDetector;
+  private serverTestService: ServerTestService;
 
   // Feature flag to control whether dark mode is enabled
   // When set to true, the theme option will appear in the navigation menu
@@ -213,6 +218,10 @@ export class App {
       'TestAllServersRequested',
       this.testAllServers.bind(this)
     );
+    this.rootEl.addEventListener(
+      'SetTestModeRequested',
+      this.setTestMode.bind(this)
+    );
 
     if (this.appearanceFeatureEnabled) {
       this.rootEl.showAppearanceView = true;
@@ -296,8 +305,64 @@ export class App {
       30000,
       ispInfo => {
         this.serverLogsHandler.setISPInfo(ispInfo);
-      }
+      },
+      environmentVars.IPGEOLOCATION_API_KEY
     );
+
+    // Initialize server test service
+    const serverTestCallbacks: ServerTestCallbacks = {
+      onTestStart: (serverId: string) => {
+        this.updateServerListItem(serverId, {isTesting: true});
+      },
+      onTestComplete: (serverId: string, result: ServerTestResult) => {
+        this.updateServerListItem(serverId, {
+          downloadSpeedKBps: result.downloadSpeedKBps,
+          uploadSpeedKBps: result.uploadSpeedKBps,
+          latencyMs: result.latencyMs,
+          speedTestSuccess: result.success,
+          speedTestError: result.error,
+          isTesting: false,
+        });
+      },
+      onTestError: (serverId: string, error: Error) => {
+        this.updateServerListItem(serverId, {
+          isTesting: false,
+        });
+        this.showLocalizedError(error);
+      },
+      onAllTestsComplete: (results: ServerTestResult[]) => {
+        const successfulTests = results.filter(r => r.success).length;
+        this.rootEl.showToast(
+          this.localize(
+            'all-speed-tests-complete',
+            'successful',
+            String(successfulTests),
+            'total',
+            String(results.length)
+          )
+        );
+      },
+      onServerConnectionChange: (serverId: string, connected: boolean) => {
+        this.updateServerListItem(serverId, {
+          connectionState: connected
+            ? ServerConnectionState.CONNECTED
+            : ServerConnectionState.DISCONNECTED,
+        });
+      },
+    };
+
+    this.serverTestService = new ServerTestService(
+      this.vpnApi,
+      this.serverRepo,
+      this.serverLogsHandler,
+      serverTestCallbacks,
+      TestMode.AUTO // Use AUTO mode by default for best performance
+    );
+
+    // Request notification permission for Android 13+
+    this.requestNotificationPermissionIfNeeded().catch(error => {
+      console.warn('Failed to request notification permission:', error);
+    });
 
     // Ensure cleanup on window close
     window.addEventListener('beforeunload', () => {
@@ -1050,117 +1115,7 @@ export class App {
 
   private async testServerSpeed(event: CustomEvent) {
     const {serverId} = event.detail;
-
-    // Prevent concurrent testing of the same server
-    if (this.serversCurrentlyTesting.has(serverId)) {
-      return;
-    }
-
-    try {
-      const server = this.getServerByServerId(serverId);
-
-      // Mark server as testing and update UI
-      this.serversCurrentlyTesting.add(serverId);
-      this.updateServerListItem(serverId, {
-        isTesting: true,
-      });
-
-      // Check if server is already connected
-      const wasConnected = await server.checkRunning();
-      let shouldDisconnect = false;
-
-      try {
-        // If server is not connected, connect it first
-        if (!wasConnected) {
-          console.debug(`Connecting to server ${serverId} for speed test`);
-          await server.connect();
-          shouldDisconnect = true;
-
-          // Wait a moment for connection to stabilize
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        // Now test connectivity through the connected server
-        const result = await this.vpnApi.testConnectivity();
-        result.serverId = serverId;
-
-        this.serverTestResults.set(serverId, result);
-
-        // Only log if server has a rowId (meaning it came from API)
-        if (server.rowId) {
-          if (result.pingSuccess !== undefined) {
-            this.serverLogsHandler.addLog(
-              server.rowId,
-              LogType.PING_TEST,
-              result.pingSuccess
-            );
-          }
-          if (result.bandwidthSuccess !== undefined) {
-            this.serverLogsHandler.addLog(
-              server.rowId,
-              LogType.BANDWIDTH_TEST,
-              result.bandwidthSuccess
-            );
-          }
-        }
-
-        // Update the server list item with test results
-        this.updateServerListItem(serverId, {
-          responseTime: result.responseTime,
-          bandwidth: result.bandwidth,
-          speedTestSuccess: result.success,
-          speedTestError: result.error,
-          isTesting: false,
-        });
-      } finally {
-        // Disconnect if we connected the server ourselves
-        if (shouldDisconnect) {
-          try {
-            console.debug(
-              `Disconnecting from server ${serverId} after speed test`
-            );
-            await server.disconnect();
-            // Update UI to reflect disconnected state
-            this.updateServerListItem(serverId, {
-              connectionState: ServerConnectionState.DISCONNECTED,
-            });
-          } catch (disconnectError) {
-            console.warn(
-              `Failed to disconnect after speed test: ${disconnectError}`
-            );
-          }
-        }
-      }
-    } catch (error) {
-      // Ensure we clear the testing state even on error
-      this.updateServerListItem(serverId, {
-        isTesting: false,
-      });
-
-      // Ensure server is properly disconnected if we connected it for testing
-      // This handles cases where the error occurred after connection but before the finally block
-      try {
-        const server = this.getServerByServerId(serverId);
-        const isRunning = await server.checkRunning();
-        if (isRunning) {
-          await server.disconnect();
-          this.updateServerListItem(serverId, {
-            connectionState: ServerConnectionState.DISCONNECTED,
-          });
-        }
-      } catch (disconnectError) {
-        console.warn(
-          `Failed to cleanup server connection after test error: ${disconnectError}`
-        );
-      }
-
-      this.showLocalizedError(
-        error instanceof Error ? error : new Error(String(error))
-      );
-    } finally {
-      // Always remove from testing set
-      this.serversCurrentlyTesting.delete(serverId);
-    }
+    await this.serverTestService.testServerSpeed(serverId);
   }
 
   private async testAllServers(_event: CustomEvent) {
@@ -1171,170 +1126,29 @@ export class App {
         return;
       }
 
-      // Mark all servers as testing
-      servers.forEach(server => {
-        if (!this.serversCurrentlyTesting.has(server.id)) {
-          this.serversCurrentlyTesting.add(server.id);
-          this.updateServerListItem(server.id, {
-            isTesting: true,
-          });
-        }
-      });
-
       this.rootEl.showToast(this.localize('testing-all-servers'));
-
-      const results: ServerTestResult[] = [];
-
-      // Test servers sequentially to avoid overwhelming the network
-      // and to ensure proper connect/disconnect cycles
-      for (const server of servers) {
-        try {
-          // Check if server is already connected
-          const wasConnected = await server.checkRunning();
-          let shouldDisconnect = false;
-
-          try {
-            // If server is not connected, connect it first
-            if (!wasConnected) {
-              console.debug(`Connecting to server ${server.id} for speed test`);
-              await server.connect();
-              shouldDisconnect = true;
-
-              // Wait a moment for connection to stabilize
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            // Now test connectivity through the connected server
-            const result = await this.vpnApi.testConnectivity();
-            result.serverId = server.id;
-            results.push(result);
-
-            this.serverTestResults.set(server.id, result);
-
-            // Only log if server has a rowId (meaning it came from API)
-            if (server.rowId) {
-              if (result.pingSuccess !== undefined) {
-                this.serverLogsHandler.addLog(
-                  server.rowId,
-                  LogType.PING_TEST,
-                  result.pingSuccess
-                );
-              }
-              if (result.bandwidthSuccess !== undefined) {
-                this.serverLogsHandler.addLog(
-                  server.rowId,
-                  LogType.BANDWIDTH_TEST,
-                  result.bandwidthSuccess
-                );
-              }
-            }
-
-            // Update UI with result
-            this.updateServerListItem(result.serverId, {
-              responseTime: result.responseTime,
-              bandwidth: result.bandwidth,
-              speedTestSuccess: result.success,
-              speedTestError: result.error,
-              isTesting: false,
-            });
-          } finally {
-            // Disconnect if we connected the server ourselves
-            if (shouldDisconnect) {
-              try {
-                console.debug(
-                  `Disconnecting from server ${server.id} after speed test`
-                );
-                await server.disconnect();
-                // Update UI to reflect disconnected state
-                this.updateServerListItem(server.id, {
-                  connectionState: ServerConnectionState.DISCONNECTED,
-                });
-              } catch (disconnectError) {
-                console.warn(
-                  `Failed to disconnect after speed test: ${disconnectError}`
-                );
-              }
-            }
-          }
-        } catch (error) {
-          // Create failed result for this server
-          const failedResult: ServerTestResult = {
-            serverId: server.id,
-            responseTime: 0,
-            bandwidth: 0,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          };
-          results.push(failedResult);
-
-          // Only log if server has a rowId (meaning it came from API)
-          if (server.rowId) {
-            this.serverLogsHandler.addLog(
-              server.rowId,
-              LogType.PING_TEST,
-              false
-            );
-            this.serverLogsHandler.addLog(
-              server.rowId,
-              LogType.BANDWIDTH_TEST,
-              false
-            );
-          }
-
-          this.updateServerListItem(server.id, {
-            responseTime: 0,
-            bandwidth: 0,
-            speedTestSuccess: false,
-            speedTestError: failedResult.error,
-            isTesting: false,
-          });
-
-          // Ensure server is properly disconnected if we connected it for testing
-          // This handles cases where the error occurred after connection but before the finally block
-          try {
-            const isRunning = await server.checkRunning();
-            if (isRunning) {
-              await server.disconnect();
-              this.updateServerListItem(server.id, {
-                connectionState: ServerConnectionState.DISCONNECTED,
-              });
-            }
-          } catch (disconnectError) {
-            console.warn(
-              `Failed to cleanup server connection after test error: ${disconnectError}`
-            );
-          }
-        }
-
-        this.serversCurrentlyTesting.delete(server.id);
-      }
-
-      const successfulTests = results.filter(
-        (r: ServerTestResult) => r.success
-      ).length;
-      this.rootEl.showToast(
-        this.localize(
-          'all-speed-tests-complete',
-          'successful',
-          String(successfulTests),
-          'total',
-          String(results.length)
-        )
-      );
-
-      // Note: Individual speed test results are already logged above
+      await this.serverTestService.testAllServers();
     } catch (error) {
-      // Clear testing state for all servers on error
-      this.serversCurrentlyTesting.forEach(serverId => {
-        this.updateServerListItem(serverId, {
-          isTesting: false,
-        });
-      });
-      this.serversCurrentlyTesting.clear();
-
       this.showLocalizedError(
         error instanceof Error ? error : new Error(String(error))
       );
+    }
+  }
+
+  private setTestMode(event: CustomEvent) {
+    const {mode} = event.detail;
+    if (Object.values(TestMode).includes(mode)) {
+      this.serverTestService.setTestMode(mode);
+      this.rootEl.showToast(this.localize('test-mode-changed', 'mode', mode));
+    }
+  }
+
+  private async requestNotificationPermissionIfNeeded() {
+    // Only request on android platform
+    if ('cordova' in window && window.cordova.platformId === 'android') {
+      console.log('Requesting notification permission...');
+      const result = await pluginExec<string>('requestNotificationPermission');
+      console.log('Notification permission result:', result);
     }
   }
 

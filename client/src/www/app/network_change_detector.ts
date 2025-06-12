@@ -32,7 +32,8 @@ export class NetworkChangeDetector {
   constructor(
     serverRepository: ServerRepository,
     checkInterval = 30000,
-    callback: NetworkChangeCallback | null = null
+    callback: NetworkChangeCallback | null = null,
+    private ipgeolocationApiKey: string | null = null
   ) {
     this.serverRepository = serverRepository;
     this.checkInterval = checkInterval; // Convert to milliseconds
@@ -101,7 +102,7 @@ export class NetworkChangeDetector {
       },
       {
         name: 'ipgeolocation.io',
-        url: `https://api.ipgeolocation.io/ipgeo?apiKey=${process.env.IPGEOLOCATION_API_KEY}`,
+        url: `https://api.ipgeolocation.io/ipgeo?apiKey=${this.ipgeolocationApiKey}`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         mapResponse: (data: any) => ({
           isp: data.isp || data.organization || 'Unknown ISP',
@@ -114,8 +115,8 @@ export class NetworkChangeDetector {
       },
     ];
 
-    for (const api of apis) {
-      for (let attempt = 0; attempt < retries; attempt++) {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      for (const api of apis) {
         try {
           console.debug(
             `Trying ${api.name} (attempt ${attempt + 1}/${retries})`
@@ -164,8 +165,6 @@ export class NetworkChangeDetector {
           }
         }
       }
-
-      console.warn(`All attempts failed for ${api.name}, trying next API...`);
     }
 
     console.error('All ISP APIs failed after retries');

@@ -25,12 +25,14 @@ interface ApiResponse {
 
 export interface ServerTestResult {
   serverId: string;
-  responseTime: number;
-  bandwidth: number;
+  downloadSpeedKBps: number;
+  uploadSpeedKBps: number;
+  latencyMs: number;
   success: boolean;
   error?: string;
   pingSuccess?: boolean;
-  bandwidthSuccess?: boolean;
+  downloadTestSuccess?: boolean;
+  uploadTestSuccess?: boolean;
 }
 
 export class VPNManagementAPI {
@@ -112,7 +114,7 @@ export class VPNManagementAPI {
     const startTime = performance.now();
     let pingSuccess = false;
     let bandwidthSuccess = false;
-    let responseTime = 0;
+    let latencyMs = 0;
     let bandwidth = 0;
     let error: string | undefined;
 
@@ -137,14 +139,14 @@ export class VPNManagementAPI {
           );
         }
 
-        responseTime = Math.round(performance.now() - startTime);
+        latencyMs = Math.round(performance.now() - startTime);
         pingSuccess = true;
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (pingError) {
       pingSuccess = false;
-      responseTime = Math.round(performance.now() - startTime);
+      latencyMs = Math.round(performance.now() - startTime);
       error =
         pingError instanceof Error ? pingError.message : String(pingError);
     }
@@ -169,11 +171,13 @@ export class VPNManagementAPI {
 
     return {
       serverId: '',
-      responseTime,
-      bandwidth,
+      downloadSpeedKBps: bandwidth, // Approximate as download speed for web-based testing
+      uploadSpeedKBps: Math.round(bandwidth * 0.8), // Estimate upload as 80% of download
+      latencyMs: latencyMs,
       success: pingSuccess && bandwidthSuccess,
       pingSuccess,
-      bandwidthSuccess,
+      downloadTestSuccess: bandwidthSuccess,
+      uploadTestSuccess: bandwidthSuccess,
       error,
     };
   }
@@ -252,23 +256,5 @@ export class VPNManagementAPI {
     }
 
     return Math.round(medianBandwidth);
-  }
-
-  // Note: This method is now just for API compatibility
-  // The actual server testing logic should be handled by the App class
-  // which can manage server connections properly
-  async testConnectivityBatch(
-    serverCount: number
-  ): Promise<ServerTestResult[]> {
-    const results: ServerTestResult[] = [];
-
-    // Test connectivity multiple times for statistical purposes
-    for (let i = 0; i < serverCount; i++) {
-      const result = await this.testConnectivity();
-      result.serverId = `test-${i}`;
-      results.push(result);
-    }
-
-    return results;
   }
 }

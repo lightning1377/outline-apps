@@ -18,7 +18,8 @@ export enum LogType {
   CONNECTED = 'connected',
   DISCONNECTED = 'disconnected',
   PING_TEST = 'ping_test',
-  BANDWIDTH_TEST = 'bandwidth_test',
+  DOWNLOAD_TEST = 'download_test',
+  UPLOAD_TEST = 'upload_test',
 }
 
 export interface ServerLog {

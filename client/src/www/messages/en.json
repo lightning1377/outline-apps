@@ -142,8 +142,6 @@
   "no-servers-available": "No servers available from API.",
   "no-valid-servers-added": "No valid servers could be added from the API response.",
   "testing-server-speed": "Testing server speed...",
-  "speed-test-complete": "Speed test complete: {responseTime}ms response time, {bandwidth} KB/s bandwidth",
-  "speed-test-failed": "Speed test failed: {error}",
   "testing-all-servers": "Testing all servers speed...",
   "no-servers-to-test": "No servers available to test.",
   "all-speed-tests-complete": "Speed tests complete: {successful} of {total} tests successful",

@@ -22,10 +22,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.RemoteException;
 import androidx.annotation.Nullable;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -62,6 +66,8 @@ public class OutlinePlugin extends CordovaPlugin {
     IS_RUNNING("isRunning"),
     INIT_ERROR_REPORTING("initializeErrorReporting"),
     REPORT_EVENTS("reportEvents"),
+    TEST_SERVER_CONNECTIVITY("testServerConnectivity"),
+    REQUEST_NOTIFICATION_PERMISSION("requestNotificationPermission"),
     QUIT("quitApplication");
 
     private final static Map<String, Action> actions = new HashMap<>();
@@ -98,6 +104,7 @@ public class OutlinePlugin extends CordovaPlugin {
   }
 
   private static final int REQUEST_CODE_PREPARE_VPN = 100;
+  private static final int REQUEST_CODE_NOTIFICATION_PERMISSION = 101;
 
   // AIDL interface for VpnTunnelService, which is bound for the lifetime of this class.
   // The VpnTunnelService runs in a sub process and is thread-safe.
@@ -169,7 +176,20 @@ public class OutlinePlugin extends CordovaPlugin {
       return true;
     }
 
+    if (Action.REQUEST_NOTIFICATION_PERMISSION.is(action)) {
+      requestNotificationPermission(callbackContext);
+      return true;
+    }
+
     if (Action.START.is(action)) {
+      // Check notification permission before starting VPN (for Android 13+)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(getBaseContext(), android.Manifest.permission.POST_NOTIFICATIONS) 
+            != PackageManager.PERMISSION_GRANTED) {
+          LOG.warning("POST_NOTIFICATIONS permission not granted. VPN notifications may not be visible.");
+        }
+      }
+      
       // Prepare the VPN before spawning a new thread. Fall through if it's already prepared.
       try {
         if (!prepareVpnService()) {
@@ -230,6 +250,25 @@ public class OutlinePlugin extends CordovaPlugin {
           final String uuid = args.getString(0);
           SentryErrorReporter.send(uuid);
           callback.success();
+        } else if (Action.TEST_SERVER_CONNECTIVITY.is(action)) {
+          final String transportConfig = args.getString(0);
+          LOG.info(String.format(Locale.ROOT, "Testing server connectivity: %s", transportConfig));
+          
+          // Perform the connectivity test - returns JSON string on success, null on error
+          String testResults = vpnTunnelService.testServerConnectivity(transportConfig);
+          if (testResults != null) {
+            // Test succeeded, return the results
+            try {
+              JSONObject results = new JSONObject(testResults);
+              callback.success(results);
+            } catch (JSONException e) {
+              LOG.log(Level.WARNING, "Failed to parse connectivity test results", e);
+              callback.success(testResults); // Return as string if JSON parsing fails
+            }
+          } else {
+            // Test failed
+            sendActionResult(callback, new PlatformError(Platerrors.InternalError, "Server connectivity test failed"));
+          }
         } else {
           throw new IllegalArgumentException(
               String.format(Locale.ROOT, "Unexpected action %s", action));
@@ -269,6 +308,49 @@ public class OutlinePlugin extends CordovaPlugin {
     }
     executeAsync(Action.START.value, startVpnRequest.args, startVpnRequest.callback);
     startVpnRequest = null;
+  }
+
+  // Requests notification permission for Android 13+ (API level 33+)
+  private void requestNotificationPermission(CallbackContext callbackContext) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(getBaseContext(), android.Manifest.permission.POST_NOTIFICATIONS) 
+          != PackageManager.PERMISSION_GRANTED) {
+        LOG.info("Requesting POST_NOTIFICATIONS permission");
+        ActivityCompat.requestPermissions(cordova.getActivity(), 
+            new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 
+            REQUEST_CODE_NOTIFICATION_PERMISSION);
+        // Store callback to handle result
+        this.statusCallback = callbackContext;
+      } else {
+        LOG.info("POST_NOTIFICATIONS permission already granted");
+        callbackContext.success("Permission already granted");
+      }
+    } else {
+      // For Android versions < 13, notifications don't require runtime permission
+      LOG.info("POST_NOTIFICATIONS permission not required for this Android version");
+      callbackContext.success("Permission not required");
+    }
+  }
+
+  @Override
+  public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
+    super.onRequestPermissionResult(requestCode, permissions, grantResults);
+    
+    if (requestCode == REQUEST_CODE_NOTIFICATION_PERMISSION) {
+      if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        LOG.info("POST_NOTIFICATIONS permission granted");
+        if (statusCallback != null) {
+          statusCallback.success("Permission granted");
+          statusCallback = null;
+        }
+      } else {
+        LOG.warning("POST_NOTIFICATIONS permission denied");
+        if (statusCallback != null) {
+          statusCallback.error("Permission denied");
+          statusCallback = null;
+        }
+      }
+    }
   }
 
   private DetailedJsonError startVpnTunnel(

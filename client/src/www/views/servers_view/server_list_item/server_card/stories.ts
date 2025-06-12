@@ -39,6 +39,47 @@ export default {
   },
 };
 
+// Test data for stories
+const serverWithSpeedTest = {
+  id: '1',
+  name: 'Fast Server',
+  address: '192.168.1.100:8080',
+  connectionState: ServerConnectionState.DISCONNECTED,
+  disabled: false,
+  downloadSpeedKBps: 1250,
+  uploadSpeedKBps: 850,
+  latencyMs: 45,
+  speedTestSuccess: true,
+  isTesting: false,
+};
+
+const serverWithSlowSpeedTest = {
+  id: '2',
+  name: 'Slow Server',
+  address: '10.0.0.1:9090',
+  connectionState: ServerConnectionState.CONNECTED,
+  disabled: false,
+  downloadSpeedKBps: 200,
+  uploadSpeedKBps: 50,
+  latencyMs: 350,
+  speedTestSuccess: true,
+  isTesting: false,
+};
+
+const serverWithFailedTest = {
+  id: '3',
+  name: 'Failed Server',
+  address: 'slow.example.com:443',
+  connectionState: ServerConnectionState.DISCONNECTED,
+  disabled: false,
+  downloadSpeedKBps: 0,
+  uploadSpeedKBps: 0,
+  latencyMs: 0,
+  speedTestSuccess: false,
+  speedTestError: 'Connection timeout',
+  isTesting: false,
+};
+
 export const ServerRowCard = ({server}: ServerListItemElement) => html`
   <div style="width: 100%; height: clamp(100px, 100%, 150px);">
     <server-row-card .localize=${localize} .server=${server}></server-row-card>
@@ -51,5 +92,32 @@ export const ServerHeroCard = ({server}: ServerListItemElement) => html`
       .localize=${localize}
       .server=${server}
     ></server-hero-card>
+  </div>
+`;
+
+export const ServerWithNewSpeedTest = () => html`
+  <div style="width: 100%; height: clamp(100px, 100%, 150px);">
+    <server-row-card
+      .localize=${localize}
+      .server=${serverWithSpeedTest}
+    ></server-row-card>
+  </div>
+`;
+
+export const ServerWithSlowSpeedTest = () => html`
+  <div style="width: 100%; height: clamp(100px, 100%, 150px);">
+    <server-row-card
+      .localize=${localize}
+      .server=${serverWithSlowSpeedTest}
+    ></server-row-card>
+  </div>
+`;
+
+export const ServerWithFailedSpeedTest = () => html`
+  <div style="width: 100%; height: clamp(100px, 100%, 150px);">
+    <server-row-card
+      .localize=${localize}
+      .server=${serverWithFailedTest}
+    ></server-row-card>
   </div>
 `;

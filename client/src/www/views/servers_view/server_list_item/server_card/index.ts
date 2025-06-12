@@ -169,6 +169,10 @@ const sharedCSS = css`
     display: inline-block;
   }
 
+  .speed-test-result > span {
+    font-size: 0.75rem;
+  }
+
   .speed-test-result.success {
     background-color: rgba(76, 175, 80, 0.1);
     color: #4caf50;
@@ -177,6 +181,29 @@ const sharedCSS = css`
   .speed-test-result.error {
     background-color: rgba(244, 67, 54, 0.1);
     color: #f44336;
+  }
+
+  .speed-test-latency {
+    font-weight: 500;
+  }
+
+  .speed-test-separator {
+    margin: 0 4px;
+    opacity: 0.7;
+  }
+
+  .speed-test-download {
+    color: #4caf50;
+    font-weight: 500;
+  }
+
+  .speed-test-upload {
+    color: #2196f3;
+    font-weight: 500;
+  }
+
+  .speed-test-legacy {
+    color: inherit;
   }
 `;
 
@@ -267,7 +294,7 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
             ${messages.serverName}
           </h2>
           <label class="card-metadata-server-address">${server.address}</label>
-          ${server.responseTime !== undefined
+          ${server.latencyMs !== undefined
             ? html`
                 <div class="card-metadata-speed-test">
                   <span
@@ -276,7 +303,24 @@ const getSharedComponents = (element: ServerListItemElement & LitElement) => {
                       : 'error'}"
                   >
                     ${server.speedTestSuccess
-                      ? `${server.responseTime}ms • ${server.bandwidth} KB/s`
+                      ? html`
+                          <span class="speed-test-latency"
+                            >${server.latencyMs}ms</span
+                          >
+                          ${server.downloadSpeedKBps !== undefined &&
+                          server.uploadSpeedKBps !== undefined
+                            ? html`
+                                <span class="speed-test-separator">•</span>
+                                <span class="speed-test-download"
+                                  >↓${server.downloadSpeedKBps} KB/s</span
+                                >
+                                <span class="speed-test-separator">•</span>
+                                <span class="speed-test-upload"
+                                  >↑${server.uploadSpeedKBps} KB/s</span
+                                >
+                              `
+                            : ''}
+                        `
                       : localize(
                           'speed-test-failed-short',
                           'error',

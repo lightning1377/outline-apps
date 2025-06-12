@@ -36,8 +36,9 @@ export interface ServerListItem {
   name: string;
   connectionState: ServerConnectionState;
   // Speed test results
-  responseTime?: number;
-  bandwidth?: number;
+  downloadSpeedKBps?: number;
+  uploadSpeedKBps?: number;
+  latencyMs?: number;
   speedTestSuccess?: boolean;
   speedTestError?: string;
   // Speed test state

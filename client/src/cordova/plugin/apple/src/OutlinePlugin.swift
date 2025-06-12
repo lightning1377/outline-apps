@@ -144,6 +144,29 @@ class OutlinePlugin: CDVPlugin {
     }
   }
 
+  func testServerConnectivity(_ command: CDVInvokedUrlCommand) {
+    guard let transportConfig = command.argument(at: 0) as? String else {
+      return sendError("Missing transport configuration", callbackId: command.callbackId)
+    }
+    DDLogInfo("testServerConnectivity with config: \(transportConfig)")
+    Task {
+      do {
+        let testResults = try await OutlineVpn.shared.performComprehensiveTest(withTransport: transportConfig)
+        // Convert test results to JSON string for return
+        if let jsonData = try? JSONSerialization.data(withJSONObject: testResults, options: []),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+          self.sendSuccess(jsonString, callbackId: command.callbackId)
+        } else {
+          self.sendError("Failed to serialize test results", callbackId: command.callbackId)
+        }
+      } catch {
+        let errorJson = marshalErrorJson(error: error)
+        DDLogError("testServerConnectivity failed: \(errorJson)")
+        self.sendError(errorJson, callbackId: command.callbackId)
+      }
+    }
+  }
+
   func invokeMethod(_ command: CDVInvokedUrlCommand) {
     guard let methodName = command.argument(at: 0) as? String else {
       return sendError("Missing method name", callbackId: command.callbackId)
